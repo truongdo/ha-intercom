@@ -1,0 +1,19 @@
+[Unit]
+Description=Live Intercom
+After=network.target sound.target
+
+[Service]
+User=intercom
+Group=audio
+WorkingDirectory=/var/lib/live-intercom
+ExecStart=/opt/live-com-ha/venv/bin/python -m live_intercom --config /etc/live-intercom/config.toml serve
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/live-intercom
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

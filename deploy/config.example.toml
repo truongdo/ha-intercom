@@ -1,0 +1,17 @@
+host = "127.0.0.1"
+port = 8000
+static_dir = "/opt/live-com-ha/frontend-dist"
+
+[audio]
+device_match = "Jabra"
+echo_cancel = "off"   # "speex" needs the optional speexdsp package
+jitter_ms = 60
+
+[auth]
+users_file = "/var/lib/live-intercom/users.toml"
+secret_file = "/var/lib/live-intercom/secret.key"
+session_hours = 12
+secure_cookie = true   # true behind Cloudflare Tunnel; set false to test over plain http://localhost
+
+[session]
+idle_timeout_s = 10
