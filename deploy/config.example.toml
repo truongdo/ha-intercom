@@ -11,7 +11,7 @@ jitter_ms = 60
 users_file = "/var/lib/live-intercom/users.toml"
 secret_file = "/var/lib/live-intercom/secret.key"
 session_hours = 12
-secure_cookie = true   # true behind Cloudflare Tunnel; set false to test over plain http://localhost
+secure_cookie = false  # default false so plain-http SSH-forward testing works; true adds the Secure flag (safer, HTTPS only)
 
 [session]
 idle_timeout_s = 10

@@ -37,11 +37,13 @@ on every login, so no restart is needed.
 
 ### `secure_cookie`
 
-- Behind Cloudflare Tunnel (HTTPS at the edge): keep `secure_cookie = true`.
-- Testing over plain HTTP, for example `ssh -L 8000:127.0.0.1:8000 host` and opening
-  `http://localhost:8000`: set `secure_cookie = false`, otherwise the browser drops the
-  session cookie and login appears to succeed but `/api/me` stays 401. Set it back to `true`
-  for production.
+- The default in `config.example.toml` is `false`, so testing over plain HTTP works, for
+  example `ssh -L 8000:127.0.0.1:8000 host` and opening `http://localhost:8000`. With `true`
+  the browser drops the session cookie there and login appears to succeed but `/api/me`
+  stays 401.
+- With `false` the cookie has no `Secure` flag, so a browser would also send it over plain
+  `http://`. Behind Cloudflare Tunnel turn on "Always Use HTTPS" and HSTS for the hostname,
+  or set `secure_cookie = true`, since the cookie protects access to a live microphone.
 
 The WebSocket refuses handshakes whose `Origin` host differs from the request `Host`, so the
 tunnel must pass the original `Host` header through (cloudflared does by default).

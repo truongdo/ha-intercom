@@ -98,7 +98,7 @@ jitter_ms = 60           # raise to 80-100 if audio is choppy over the tunnel
 users_file = "/var/lib/live-intercom/users.toml"
 secret_file = "/var/lib/live-intercom/secret.key"
 session_hours = 12
-secure_cookie = true     # see below
+secure_cookie = false    # default; see below (true is safer behind HTTPS)
 
 [session]
 idle_timeout_s = 10      # a session with no client audio for this long is ended
@@ -106,10 +106,17 @@ idle_timeout_s = 10      # a session with no client audio for this long is ended
 
 ### `secure_cookie`
 
-- Through the Cloudflare tunnel (HTTPS): keep `secure_cookie = true`.
-- Testing over plain HTTP with an SSH forward (`http://localhost:8000`): set it to `false`
-  and restart. Otherwise the browser drops the cookie: login appears to succeed but every
-  request after it is 401. Set it back to `true` afterwards.
+- The default is `false`, chosen by the owner so plain-HTTP testing over the SSH forward
+  (`http://localhost:8000`) works without config changes. With `true` the browser drops the
+  cookie there: login appears to succeed but every request after it is 401.
+- Trade-off: with `false` the cookie has no `Secure` flag, so a browser will also send it
+  over plain `http://`. The cookie is the only gate to a live microphone. If you serve the
+  app through the Cloudflare tunnel, turn on "Always Use HTTPS" and HSTS for the hostname
+  (SSL/TLS, Edge Certificates), or set `secure_cookie = true` and use `false` only briefly
+  for local tests.
+- `/etc/live-intercom/config.toml` is created from the example only once and never
+  overwritten, so changing the example does not change an existing host. Edit the live file
+  and run `systemctl restart live-intercom`.
 
 ### Changing the USB audio device
 
@@ -131,12 +138,12 @@ ssh -N -L 8000:127.0.0.1:8000 root@192.168.0.17
 ```
 
 Then open `http://localhost:8000` in Chrome (`localhost` counts as a secure context, so the
-microphone works). Remember `secure_cookie = false` for this, see above.
+microphone works). This needs `secure_cookie = false`, see above.
 
 ## Cloudflare tunnel
 
 Point a public hostname of the existing tunnel at `http://localhost:8000` (in the Cloudflare
-dashboard for a token-based tunnel). Keep `secure_cookie = true`. The app refuses WebSocket
+dashboard for a token-based tunnel). Prefer `secure_cookie = true` here, or enable "Always Use HTTPS" and HSTS. The app refuses WebSocket
 handshakes whose `Origin` host differs from the request `Host` header; cloudflared passes the
 original `Host` through by default, so nothing to configure. Failed-login rate limiting keys
 on the client IP that uvicorn takes from `X-Forwarded-For` (trusted only from `127.0.0.1`).
