@@ -15,7 +15,7 @@ speaker and the host mic streams back to the browser, both at once.
 |---|---|
 | Meaning of "2-way" | Live full-duplex voice intercom |
 | Transport | WebSocket with raw PCM frames |
-| Stack | Python backend (FastAPI) + TypeScript frontend (Vite, no framework) |
+| Stack | Python backend (Starlette) + TypeScript frontend (Vite, no framework) |
 | Clients | One active client at a time; a second gets "busy" |
 | Auth | Username and password, signed session cookie |
 | Echo cancellation | Browser-side always on; server-side optional, off by default |
@@ -37,7 +37,7 @@ speaker and the host mic streams back to the browser, both at once.
 
 One Python process bound to `127.0.0.1:8000`, in three parts.
 
-- **web**: FastAPI serves the built frontend and the login endpoints. Users
+- **web**: Starlette serves the built frontend and the login endpoints. Users
   come from `users.toml` (argon2 hashes). A CLI command `add-user` writes it.
 - **audio**: owns the USB device through one full-duplex ALSA stream. Exposes a
   mic-frame queue (out) and a speaker-frame queue (in). Has a playback jitter
@@ -107,7 +107,7 @@ LAN is roughly 100 to 150 ms; higher through Cloudflare.
 
 Error handling:
 
-- Auth failure: WebSocket refused with HTTP 401; the page returns to login.
+- Auth failure: WebSocket refused before accept (HTTP 403); the page returns to login.
 - Mic permission denied: the page shows a message and never opens the socket.
 - Network drop: the server stops audio and releases the lock. No automatic
   reconnect, because silently reopening a live microphone is a privacy risk.
