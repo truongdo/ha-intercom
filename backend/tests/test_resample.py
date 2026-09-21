@@ -37,3 +37,19 @@ def test_to_channels_duplicates():
     out = to_channels(np.array([1, 2], dtype=np.int16), 2)
     assert out.shape == (2, 2)
     assert out.tolist() == [[1, 1], [2, 2]]
+
+
+def test_non_integer_downsample_attenuates_aliasing_tone():
+    # 15 kHz at 44.1 kHz folds to 1 kHz at 16 kHz unless low-passed first.
+    t = np.arange(882)
+    tone = (10000 * np.sin(2 * np.pi * 15000 * t / 44100)).astype(np.int16)
+    out = resample(tone, 44100, 16000).astype(np.float64)
+    assert np.sqrt((out ** 2).mean()) < 0.3 * 10000 / np.sqrt(2)
+
+
+def test_non_integer_downsample_keeps_dc_and_voice_band():
+    assert set(resample(np.full(882, 1000, dtype=np.int16), 44100, 16000).tolist()) == {1000}
+    t = np.arange(882)
+    tone = (10000 * np.sin(2 * np.pi * 300 * t / 44100)).astype(np.int16)
+    out = resample(tone, 44100, 16000).astype(np.float64)
+    assert np.sqrt((out ** 2).mean()) > 0.9 * 10000 / np.sqrt(2)

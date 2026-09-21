@@ -1,3 +1,5 @@
+import asyncio
+import threading
 import time
 
 from starlette.applications import Starlette
@@ -35,7 +37,8 @@ def test_client_frames_reach_speaker():
     with make_client(lambda: device) as client:
         with client.websocket_connect("/ws") as ws:
             ws.receive_json()
-            ws.send_bytes(FRAME)
+            for _ in range(2):  # the jitter buffer primes before releasing audio
+                ws.send_bytes(FRAME)
             assert wait_for(lambda: device.pull_speaker() == FRAME)
 
 
@@ -95,3 +98,87 @@ def test_device_failure_reported():
             ws.receive_json()
             device.fail("device_lost")
             assert ws.receive_json() == {"type": "error", "reason": "device_lost"}
+
+
+def test_unexpected_factory_error_reported_and_lock_released():
+    calls = []
+
+    def factory():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("speexdsp missing")
+        return FakeDevice()
+
+    with make_client(factory) as client:
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == {"type": "error", "reason": "device_error"}
+        for _ in range(50):
+            with client.websocket_connect("/ws") as ws:
+                if ws.receive_json()["type"] == "ready":
+                    return
+            time.sleep(0.05)
+        raise AssertionError("lock was never released")
+
+
+def test_start_error_reported_and_device_stopped():
+    class BadStart(FakeDevice):
+        def start(self, *args):
+            raise OSError("boom")
+
+    device = BadStart()
+    with make_client(lambda: device) as client:
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == {"type": "error", "reason": "device_error"}
+
+
+def _on_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def test_device_calls_run_off_the_event_loop():
+    seen = {}
+
+    class Spy(FakeDevice):
+        def start(self, *args):
+            seen["start"] = _on_event_loop()
+            super().start(*args)
+
+        def stop(self):
+            seen["stop"] = _on_event_loop()
+            super().stop()
+
+    def factory():
+        seen["factory"] = _on_event_loop()
+        return Spy()
+
+    with make_client(factory) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()
+        assert wait_for(lambda: "stop" in seen)
+    assert seen == {"factory": False, "start": False, "stop": False}
+
+
+def test_hung_stop_does_not_wedge_the_lock(monkeypatch):
+    monkeypatch.setattr("live_intercom.session.STOP_TIMEOUT_S", 0.2)
+    release = threading.Event()
+
+    class Hung(FakeDevice):
+        def stop(self):
+            release.wait(5)
+
+    try:
+        with make_client(lambda: Hung()) as client:
+            with client.websocket_connect("/ws") as ws:
+                ws.receive_json()
+            for _ in range(60):
+                with client.websocket_connect("/ws") as ws:
+                    if ws.receive_json()["type"] == "ready":
+                        return
+                time.sleep(0.05)
+            raise AssertionError("lock stayed held by hung stop")
+    finally:
+        release.set()

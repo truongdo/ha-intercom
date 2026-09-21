@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from starlette.websockets import WebSocket
 
@@ -9,7 +10,10 @@ from .audio.device import AudioDevice, DeviceFactory, DeviceUnavailable
 from .audio.jitter import JitterBuffer
 from .protocol import FRAME_BYTES, FRAME_MS, ready_message
 
+log = logging.getLogger(__name__)
+
 MIC_QUEUE_FRAMES = 50
+STOP_TIMEOUT_S = 3.0
 
 
 class SessionManager:
@@ -18,6 +22,8 @@ class SessionManager:
         self._max_frames = max(1, jitter_ms // FRAME_MS)
         self._idle = idle_timeout_s
         self._active = False
+        # Serialises device opening with the /api/me PortAudio refresh (see web.py).
+        self.device_lock = asyncio.Lock()
 
     @property
     def active(self) -> bool:
@@ -56,12 +62,21 @@ class SessionManager:
             loop.call_soon_threadsafe(events.put_nowait, reason)
 
         device: AudioDevice | None = None
-        try:
-            device = self._device_factory()
-            device.start(on_mic, jitter.pop, on_error)
-        except DeviceUnavailable:
-            await _send_json(ws, {"type": "error", "reason": "device_unavailable"})
-            device = None
+        reason: str | None = None
+        # PortAudio calls can block for seconds: keep them off the event loop.
+        async with self.device_lock:
+            try:
+                device = await asyncio.to_thread(self._device_factory)
+                await asyncio.to_thread(device.start, on_mic, jitter.pop, on_error)
+            except DeviceUnavailable:
+                reason = "device_unavailable"
+            except Exception:
+                log.exception("audio device setup failed")
+                reason = "device_error"
+        if reason is not None:
+            if device is not None:
+                await _stop_device(device)
+            await _send_json(ws, {"type": "error", "reason": reason})
             return
 
         try:
@@ -107,8 +122,17 @@ class SessionManager:
             if watcher in done and not watcher.cancelled() and watcher.exception() is None:
                 await _send_json(ws, {"type": "error", "reason": watcher.result()})
         finally:
-            if device is not None:
-                device.stop()
+            await _stop_device(device)
+
+
+async def _stop_device(device: AudioDevice) -> None:
+    """Stop off-loop and bounded, so a hung PortAudio call can never keep the session lock held."""
+    try:
+        await asyncio.wait_for(asyncio.to_thread(device.stop), timeout=STOP_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        log.error("audio device stop timed out after %.1fs", STOP_TIMEOUT_S)
+    except Exception:
+        log.exception("audio device stop failed")
 
 
 async def _send_json(ws: WebSocket, payload: dict) -> None:
