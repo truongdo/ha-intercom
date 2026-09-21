@@ -1,5 +1,7 @@
 # Deploying live-intercom
 
+Full guide (layout, operations, troubleshooting, first-deploy lessons): [`docs/deployment.md`](../docs/deployment.md). This file is the short version.
+
 ## Deploy
 
 Run `deploy/install.sh` from the repo root. It builds the frontend, copies the project to

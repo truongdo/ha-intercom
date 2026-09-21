@@ -170,9 +170,10 @@ docs/       specs and plans
 
 ## Risks
 
-1. Full-duplex ALSA on the Speak 710: supported rates and channels are
-   unconfirmed. Fallback is to open it at the native rate and resample. Settle
-   early with `list-devices` and `loopback` on the host.
+1. Full-duplex ALSA on the Speak 710: **resolved 2026-09-21.** It is duplex at
+   16 kHz only (1 in, 2 out), so no resampling is needed; `loopback` captured
+   exactly 3 s of audio. Fallback for other devices is to open them at their
+   native rate and resample.
 2. CPU on 32-bit ARM: plain 16 kHz mono voice should be light; software echo
    cancellation is the expensive part, hence off by default. Measure on host.
 3. Cloudflare tunnel latency: adds delay beyond LAN; buffer sizes are
