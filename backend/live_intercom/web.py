@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from typing import Callable
+from urllib.parse import urlsplit
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -21,17 +23,24 @@ from .auth import (
 from .config import Config
 from .session import SessionManager
 
+log = logging.getLogger(__name__)
+
 COOKIE = "intercom_session"
-LOCAL_PEERS = ("127.0.0.1", "::1")
 
 
 def client_ip(conn: HTTPConnection) -> str:
-    peer = conn.client.host if conn.client else ""
-    forwarded = conn.headers.get("cf-connecting-ip")
-    # Only trust the tunnel's header when the request came from the local cloudflared.
-    if peer in LOCAL_PEERS and forwarded:
-        return forwarded
-    return peer
+    # uvicorn runs with proxy_headers=True and forwarded_allow_ips="127.0.0.1", so for requests
+    # arriving from the local cloudflared it has already replaced the peer address with the
+    # forwarded client address. Raw proxy headers are never read here.
+    return conn.client.host if conn.client else ""
+
+
+def origin_allowed(ws: WebSocket) -> bool:
+    origin = ws.headers.get("origin")
+    if origin is None:
+        return True
+    host = ws.headers.get("host", "")
+    return urlsplit(origin).netloc.lower() == host.lower() and bool(host)
 
 
 def create_app(
@@ -59,7 +68,11 @@ def create_app(
             username, password = str(body["username"]), str(body["password"])
         except (ValueError, KeyError, TypeError):
             return JSONResponse({"error": "bad_request"}, status_code=400)
-        users = load_users(config.auth.users_file)
+        try:
+            users = await run_in_threadpool(load_users, config.auth.users_file)
+        except OSError:
+            log.exception("cannot read users file %s", config.auth.users_file)
+            return JSONResponse({"error": "users_unavailable"}, status_code=503)
         if not await run_in_threadpool(verify_password, users, username, password):
             limiter.record_failure(ip)
             return JSONResponse({"error": "invalid_credentials"}, status_code=401)
@@ -84,12 +97,16 @@ def create_app(
         user = current_user(request)
         if user is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+        # Never refresh PortAudio while a session holds the device; probe off the event loop.
+        # The lock keeps a session from opening the device while a refresh is in progress.
+        async with manager.device_lock:
+            available = await run_in_threadpool(audio_probe, not manager.active)
         return JSONResponse(
-            {"username": user, "audio_available": audio_probe(not manager.active)}
+            {"username": user, "audio_available": available}
         )
 
     async def ws_endpoint(ws: WebSocket) -> None:
-        if current_user(ws) is None:
+        if not origin_allowed(ws) or current_user(ws) is None:
             await ws.close(code=1008)
             return
         await manager.handle(ws)

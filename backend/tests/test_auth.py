@@ -81,3 +81,19 @@ def test_rate_limiter_reset():
     assert not limiter.allowed("ip")
     limiter.reset("ip")
     assert limiter.allowed("ip")
+
+
+def test_signer_rejects_non_ascii_and_malformed_tokens():
+    signer = SessionSigner(b"k" * 32, max_age_s=100)
+    token = signer.issue("alice")
+    payload = token.rsplit(".", 1)[0]
+    for bad in (
+        "abc.d\xe9f",
+        payload + ".☃",
+        "\xe9.abc",
+        "",
+        ".",
+        "a.b.c",
+        payload + "." + "\x00",
+    ):
+        assert signer.read(bad) is None

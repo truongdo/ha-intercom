@@ -106,3 +106,60 @@ def test_static_files_served_when_directory_exists(tmp_path):
     app = create_app(make_config(tmp_path), lambda: FakeDevice(), lambda r: True)
     with TestClient(app) as c:
         assert "<h1>hi</h1>" in c.get("/").text
+
+
+def test_non_ascii_cookie_is_unauthenticated(client):
+    headers = {b"cookie": f"{COOKIE}=abc.d\xe9f".encode("latin-1")}
+    assert client.get("/api/me", headers=headers).status_code == 401
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws", headers=headers):
+            pass
+
+
+def test_login_returns_503_when_users_file_unreadable(client, monkeypatch):
+    def boom(path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("live_intercom.web.load_users", boom)
+    response = login(client)
+    assert response.status_code == 503
+    assert response.json() == {"error": "users_unavailable"}
+
+
+def test_ws_allows_matching_origin(client):
+    login(client)
+    headers = {**cookie_header(client), "origin": "http://testserver"}
+    with client.websocket_connect("/ws", headers=headers) as ws:
+        assert ws.receive_json() == ready_message()
+
+
+def test_ws_allows_missing_origin(client):
+    login(client)
+    with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
+        assert ws.receive_json() == ready_message()
+
+
+def test_ws_refuses_foreign_origin(client):
+    login(client)
+    headers = {**cookie_header(client), "origin": "https://evil.example"}
+    with pytest.raises(WebSocketDisconnect) as info:
+        with client.websocket_connect("/ws", headers=headers):
+            pass
+    assert info.value.code == 1008
+
+
+def test_rate_limit_key_ignores_cf_connecting_ip(client):
+    # uvicorn owns proxy headers; a raw cf-connecting-ip must not let a client dodge the limiter.
+    for i in range(5):
+        response = client.post(
+            "/login",
+            json={"username": "alice", "password": "bad"},
+            headers={"cf-connecting-ip": f"9.9.9.{i}"},
+        )
+        assert response.status_code == 401
+    blocked = client.post(
+        "/login",
+        json={"username": "alice", "password": "bad"},
+        headers={"cf-connecting-ip": "9.9.9.99"},
+    )
+    assert blocked.status_code == 429

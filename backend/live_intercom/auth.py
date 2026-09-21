@@ -93,15 +93,14 @@ class SessionSigner:
         return f"{payload}.{self._sign(payload)}"
 
     def read(self, token: str) -> str | None:
+        # The token is attacker-controlled (a cookie): any malformed value means "not authenticated".
         try:
             payload, signature = token.rsplit(".", 1)
-        except ValueError:
-            return None
-        if not hmac.compare_digest(signature, self._sign(payload)):
-            return None
-        try:
+            expected = self._sign(payload).encode("ascii")
+            if not hmac.compare_digest(signature.encode("utf-8", "replace"), expected):
+                return None
             data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-        except ValueError:
+        except (ValueError, TypeError):
             return None
         if not isinstance(data, dict) or data.get("exp", 0) < self._clock():
             return None

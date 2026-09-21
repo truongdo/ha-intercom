@@ -21,6 +21,8 @@ def cmd_serve(cfg: Config) -> int:
         lambda: open_alsa_device(cfg.audio),
         lambda refresh: probe_audio(cfg.audio, refresh),
     )
+    # Behind cloudflared on localhost: uvicorn rewrites request.client to the forwarded client
+    # address (only for peers in forwarded_allow_ips), which the rate limiter then uses.
     uvicorn.run(
         app,
         host=cfg.host,
