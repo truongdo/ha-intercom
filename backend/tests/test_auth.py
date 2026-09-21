@@ -20,6 +20,10 @@ def test_hash_and_verify():
     assert verify_password(users, "ghost", "pw") is False
 
 
+def test_verify_rejects_malformed_stored_hash():
+    assert verify_password({"alice": "not-a-hash"}, "alice", "pw") is False
+
+
 def test_save_and_load_users_roundtrip(tmp_path):
     path = tmp_path / "users.toml"
     assert load_users(path) == {}

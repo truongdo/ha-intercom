@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Callable
 
 from argon2 import PasswordHasher
-from argon2.exceptions import InvalidHashError, VerificationError
+from argon2.exceptions import VerificationError
+
+try:
+    from argon2.exceptions import InvalidHashError
+except ImportError:  # argon2-cffi < 23.1, as packaged by Debian trixie
+    from argon2.exceptions import InvalidHash as InvalidHashError
 
 # Modest cost (19 MiB) so verification stays fast on a small ARM board.
 _hasher = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1)
