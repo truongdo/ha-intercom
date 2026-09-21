@@ -10,6 +10,8 @@ fi
 
 id intercom >/dev/null 2>&1 || useradd --system --home /var/lib/live-intercom --shell /usr/sbin/nologin -G audio intercom
 install -d -o intercom -g intercom -m 0750 /var/lib/live-intercom
+# users.toml must be owned by the service user: add-user has to run as `intercom`, never as root.
+[ -f /var/lib/live-intercom/users.toml ] || install -o intercom -g intercom -m 0600 /dev/null /var/lib/live-intercom/users.toml
 install -d -m 0755 /etc/live-intercom
 [ -f /etc/live-intercom/config.toml ] || install -m 0644 "$DEST/deploy/config.example.toml" /etc/live-intercom/config.toml
 
@@ -22,3 +24,9 @@ systemctl daemon-reload
 systemctl enable live-intercom
 systemctl restart live-intercom
 systemctl --no-pager status live-intercom | head -n 12
+
+cat <<MSG
+
+Next: create a login (run as root; it must run as the intercom user so the service can read the file):
+  runuser -u intercom -- $DEST/venv/bin/python -m live_intercom --config /etc/live-intercom/config.toml add-user <name>
+MSG
