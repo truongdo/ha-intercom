@@ -1,0 +1,9 @@
+static_dir = "../frontend/dist"
+
+[audio]
+device_match = "Jabra"
+echo_cancel = "off"
+
+[auth]
+users_file = ".dev/users.toml"
+secret_file = ".dev/secret.key"
