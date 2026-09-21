@@ -15,17 +15,41 @@ export function int16ToFloat(input: Int16Array): Float32Array {
   return out;
 }
 
-/** Stateful linear-interpolation resampler for chunked streams. */
+/**
+ * Stateful resampler for chunked streams. When downsampling it first applies a running mean
+ * about `srcRate/dstRate` samples wide (a cheap anti-alias low-pass), then linearly interpolates.
+ */
 export class StreamResampler {
   private readonly step: number;
+  private readonly width: number;
+  private history: number[];
   private pos = 0;
   private last = 0;
 
   constructor(srcRate: number, dstRate: number) {
     this.step = srcRate / dstRate;
+    this.width = this.step > 1 ? Math.max(2, Math.round(this.step)) : 1;
+    this.history = new Array(this.width - 1).fill(0);
   }
 
-  process(input: Float32Array): Float32Array {
+  private lowpass(input: Float32Array): Float32Array {
+    if (this.width === 1) return input;
+    const w = this.width;
+    const extended = new Float32Array(this.history.length + input.length);
+    extended.set(this.history, 0);
+    extended.set(input, this.history.length);
+    const out = new Float32Array(input.length);
+    for (let i = 0; i < input.length; i++) {
+      let sum = 0;
+      for (let k = 0; k < w; k++) sum += extended[i + k];
+      out[i] = sum / w;
+    }
+    this.history = Array.from(extended.subarray(extended.length - (w - 1)));
+    return out;
+  }
+
+  process(rawInput: Float32Array): Float32Array {
+    const input = this.lowpass(rawInput);
     const out: number[] = [];
     // Virtual buffer v = [last, ...input]; pos indexes into v.
     while (Math.floor(this.pos) + 1 <= input.length) {

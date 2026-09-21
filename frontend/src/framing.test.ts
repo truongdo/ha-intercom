@@ -16,11 +16,31 @@ describe("int16/float conversion", () => {
 });
 
 describe("StreamResampler", () => {
-  it("decimates by two as a continuous stream", () => {
+  it("decimates by two as a continuous stream, averaging pairs first", () => {
     const r = new StreamResampler(32000, 16000);
     const first = r.process(Float32Array.from([1, 2, 3, 4, 5, 6, 7, 8]));
     const second = r.process(Float32Array.from([9, 10, 11, 12, 13, 14, 15, 16]));
-    expect([...first, ...second]).toEqual([0, 2, 4, 6, 8, 10, 12, 14]);
+    // Each output is the mean of the two source samples it spans (running mean of width 2).
+    expect([...first, ...second]).toEqual([0, 1.5, 3.5, 5.5, 7.5, 9.5, 11.5, 13.5]);
+  });
+
+  it("attenuates a tone above the destination Nyquist instead of aliasing it", () => {
+    const n = 4800;
+    // 15 kHz at 48 kHz folds to 1 kHz at 16 kHz when naively decimated.
+    const tone = Float32Array.from({ length: n }, (_, i) => Math.sin((2 * Math.PI * 15000 * i) / 48000));
+    const out = new StreamResampler(48000, 16000).process(tone);
+    const rms = Math.sqrt(out.reduce((a, v) => a + v * v, 0) / out.length);
+    expect(rms).toBeLessThan(0.2);
+  });
+
+  it("passes voice-band tones and DC through nearly unchanged", () => {
+    const n = 4800;
+    const tone = Float32Array.from({ length: n }, (_, i) => Math.sin((2 * Math.PI * 300 * i) / 48000));
+    const out = new StreamResampler(48000, 16000).process(tone);
+    const rms = Math.sqrt(out.reduce((a, v) => a + v * v, 0) / out.length);
+    expect(rms).toBeGreaterThan(0.68);
+    const dc = new StreamResampler(48000, 16000).process(new Float32Array(300).fill(0.5));
+    expect(dc[dc.length - 1]).toBeCloseTo(0.5, 6);
   });
 
   it("gives the same output regardless of chunking", () => {

@@ -20,11 +20,14 @@ export class Intercom {
   private playback: AudioWorkletNode | null = null;
   private upsampler: StreamResampler | null = null;
   private finished = false;
+  /** Bumped on every start(); async continuations from an earlier session compare against it. */
+  private generation = 0;
 
   constructor(private readonly onState: OnState) {}
 
   async start(): Promise<void> {
     this.finished = false;
+    this.generation++;
     this.onState("connecting");
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
@@ -77,11 +80,22 @@ export class Intercom {
   private async startAudio(): Promise<void> {
     if (!this.stream || !this.ws || this.finished) return;
     const ws = this.ws;
+    const generation = this.generation;
+    const stale = () => this.finished || this.generation !== generation;
     const ctx = new AudioContext({ latencyHint: "interactive" });
     this.ctx = ctx;
-    await ctx.audioWorklet.addModule("capture-worklet.js");
-    await ctx.audioWorklet.addModule("playback-worklet.js");
-    if (this.finished) return;
+    // finish() may run during any await below; it closes this.ctx, but if it ran before we
+    // assigned it, or the session was replaced, we must close our own context.
+    const abandon = () => void ctx.close().catch(() => {});
+    try {
+      await ctx.audioWorklet.addModule("capture-worklet.js");
+      await ctx.audioWorklet.addModule("playback-worklet.js");
+    } catch {
+      abandon();
+      if (!stale()) this.finish("error", "Could not load the audio processors.");
+      return;
+    }
+    if (stale()) return abandon();
 
     const source = ctx.createMediaStreamSource(this.stream);
     const capture = new AudioWorkletNode(ctx, "capture");
@@ -93,16 +107,25 @@ export class Intercom {
     const downsampler = new StreamResampler(ctx.sampleRate, WIRE_RATE);
     const framer = new Framer(FRAME_SAMPLES);
     capture.port.onmessage = (event) => {
+      if (stale()) return;
       const pcm = floatToInt16(downsampler.process(event.data as Float32Array));
       for (const frame of framer.push(pcm)) {
         if (ws.readyState === WebSocket.OPEN) ws.send(frame);
       }
     };
 
-    this.playback = new AudioWorkletNode(ctx, "playback", { outputChannelCount: [1] });
-    this.playback.connect(ctx.destination);
+    const playback = new AudioWorkletNode(ctx, "playback", { outputChannelCount: [1] });
+    playback.connect(ctx.destination);
+    this.playback = playback;
     this.upsampler = new StreamResampler(WIRE_RATE, ctx.sampleRate);
-    await ctx.resume();
+    try {
+      await ctx.resume();
+    } catch {
+      abandon();
+      if (!stale()) this.finish("error", "Could not start audio playback.");
+      return;
+    }
+    if (stale()) return abandon();
     this.onState("live");
   }
 
@@ -113,7 +136,7 @@ export class Intercom {
     this.ws = null;
     ws?.close();
     this.stream?.getTracks().forEach((track) => track.stop());
-    void this.ctx?.close();
+    void this.ctx?.close().catch(() => {});
     this.stream = this.ctx = this.playback = this.upsampler = null;
     this.onState(state, detail);
   }
