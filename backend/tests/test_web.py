@@ -527,17 +527,38 @@ def test_call_press_ws_connect_takes_over_the_waiting_tone(tmp_path):
             assert ws.receive_json() == ready_message()  # bypass still armed -> straight to live
 
 
-def test_call_press_trigger_skips_tone_when_device_already_busy(tmp_path, monkeypatch):
+def test_call_press_hangs_up_a_live_call(client, tmp_path):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    login(client)
+    with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
+        assert ws.receive_json() == ready_message()
+        response = client.get("/api/call/press?token=secret-token")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True, "action": "hangup"}
+        assert ws.receive_json() == {"type": "rejected", "reason": "hangup"}
+
+
+def test_call_press_does_not_hang_up_a_call_that_is_only_ringing(client, tmp_path):
+    save_call_settings(tmp_path / "settings.toml", "confirm")
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    login(client)
+    with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
+        assert ws.receive_json() == {"type": "ringing"}
+        response = client.get("/api/call/press?token=secret-token")
+        assert response.json() == {"ok": True, "action": "confirmed"}  # still confirms, not a hangup
+        assert ws.receive_json() == ready_message()
+
+
+def test_call_press_does_not_hang_up_an_unanswered_waiting_tone(tmp_path, monkeypatch):
     device = FakeDevice()
     app = create_app(make_config(tmp_path), lambda: device, lambda r: True)
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
     save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
     monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (True, ""))
     with TestClient(app) as c:
-        login(c)
-        with c.websocket_connect("/ws", headers=cookie_header(c)) as ws:
-            assert ws.receive_json() == ready_message()  # live call already occupies the device
-            response = c.get("/api/call/press?token=secret-token")
-            assert response.json() == {"ok": True, "reason": "", "action": "triggered"}
-            device.emit_mic(bytes(640))
-            assert ws.receive_bytes() == bytes(640)  # the live call's own device, untouched
+        response = c.get("/api/call/press?token=secret-token")
+        assert response.json()["action"] == "triggered"
+        assert wait_for(lambda: device.started)
+        response = c.get("/api/call/press?token=secret-token")
+        assert response.json() == {"ok": True, "reason": "", "action": "triggered"}  # re-notified, not hung up
+        assert not device.stopped

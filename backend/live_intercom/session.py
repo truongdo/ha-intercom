@@ -54,6 +54,11 @@ class SessionManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._pending_event: asyncio.Event | None = None
         self._pending_decision: str | None = None
+        # Set only once a call is actually connected (ready sent, audio flowing) — not while
+        # ringing/waiting for confirmation or playing an unanswered waiting tone. hang_up()
+        # uses this to end only a genuinely live call, leaving those earlier phases alone.
+        self._live = False
+        self._hangup_event: asyncio.Event | None = None
         # Guards the check-and-set below: without it, two confirm()/reject() calls made back to
         # back (from a thread other than the session's event loop) can both observe
         # `_pending_event` still set and both return True, because clearing it happens later, on
@@ -65,6 +70,20 @@ class SessionManager:
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def live(self) -> bool:
+        return self._live
+
+    def hang_up(self) -> bool:
+        """End the current live call. Returns False if no call is live."""
+        if not self._live:
+            return False
+        loop, event = self._loop, self._hangup_event
+        if loop is None or event is None:
+            return False
+        loop.call_soon_threadsafe(event.set)
+        return True
 
     def confirm(self) -> bool:
         return self._resolve("confirm")
@@ -279,6 +298,8 @@ class SessionManager:
             pull_box[0] = jitter.pop
             mic_sink_box[0] = on_mic
             last_rx[0] = loop.time()  # idle-timeout counts from here, not from ring start
+            self._hangup_event = asyncio.Event()
+            self._live = True
             await _send_json(ws, ready_message())
 
             async def send_mic() -> None:
@@ -295,15 +316,20 @@ class SessionManager:
                             return "idle_timeout"
 
             watcher = asyncio.create_task(watch())
-            tasks = [receive_task, asyncio.create_task(send_mic()), watcher]
+            hangup_task = asyncio.create_task(self._hangup_event.wait())
+            tasks = [receive_task, asyncio.create_task(send_mic()), watcher, hangup_task]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            if watcher in done and not watcher.cancelled() and watcher.exception() is None:
+            if hangup_task in done:
+                await _send_json(ws, rejected_message("hangup"))
+            elif watcher in done and not watcher.cancelled() and watcher.exception() is None:
                 await _send_json(ws, {"type": "error", "reason": watcher.result()})
         finally:
             self._loop = None
+            self._live = False
+            self._hangup_event = None
             await _stop_device(device)
 
 

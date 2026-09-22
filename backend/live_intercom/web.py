@@ -258,6 +258,8 @@ def create_app(
         settings = await check_call_token(request)
         if isinstance(settings, Response):
             return settings
+        if manager.hang_up():
+            return JSONResponse({"ok": True, "action": "hangup"})
         if manager.answer_or_trigger() == "confirmed":
             return JSONResponse({"ok": True, "action": "confirmed"})
         log.info("call press armed a confirmation bypass")
