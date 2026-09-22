@@ -261,6 +261,7 @@ def create_app(
         if isinstance(settings, Response):
             return settings
         manager.trigger_bypass()
+        log.info("call trigger armed a confirmation bypass")
         if not settings.telegram_bot_token or not settings.telegram_chat_id:
             return JSONResponse({"ok": False, "reason": "not_configured"})
         text = (

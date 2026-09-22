@@ -89,13 +89,15 @@ Copy `deploy/config.example.toml`. The main options:
 | Option | Default | Meaning |
 |---|---|---|
 | `host`, `port` | `127.0.0.1`, `8000` | where the service listens |
-| `settings_file` | next to `config.toml` | admin-editable Telegram settings (bot token, chat ID) — see the deployment guide |
+| `settings_file` | next to `config.toml` | admin-editable settings: Telegram bot token/chat ID, pickup mode, call-confirm token — see the deployment guide |
+| `public_url` | (unset) | optional link included in the host-initiated-call Telegram message |
 | `[audio] device_match` | `"Jabra"` | substring of the ALSA device name |
 | `[audio] echo_cancel` | `"off"` | `"speex"` enables the server-side canceller |
 | `[audio] jitter_ms` | `60` | playback buffer; raise if audio is choppy |
 | `[auth] session_hours` | `12` | login lifetime |
 | `[auth] secure_cookie` | `false` | add the `Secure` flag; see the deployment guide |
 | `[session] idle_timeout_s` | `10` | end a session with no client audio |
+| `[session] ring_timeout_s` | `30` | how long a "wait for confirmation" ring waits before timing out |
 
 ## Repository layout
 

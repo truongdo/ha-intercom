@@ -104,6 +104,7 @@ function showAdmin(username: string): void {
   const regenButton = el("button", { type: "button", textContent: "Regenerate" });
   const confirmUrl = el("p", { className: "status" });
   const rejectUrl = el("p", { className: "status" });
+  const triggerUrl = el("p", { className: "status" });
   const callForm = el(
     "form",
     {},
@@ -114,6 +115,7 @@ function showAdmin(username: string): void {
     regenButton,
     confirmUrl,
     rejectUrl,
+    triggerUrl,
     callStatus,
   );
 
@@ -121,6 +123,7 @@ function showAdmin(username: string): void {
     tokenDisplay.value = callConfirmToken;
     confirmUrl.textContent = `Confirm: ${location.origin}/api/call/confirm?token=${callConfirmToken}`;
     rejectUrl.textContent = `Reject: ${location.origin}/api/call/reject?token=${callConfirmToken}`;
+    triggerUrl.textContent = `Trigger: ${location.origin}/api/call/trigger?token=${callConfirmToken}`;
   };
 
   void getAdminSettings()

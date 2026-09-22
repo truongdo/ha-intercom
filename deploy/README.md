@@ -34,6 +34,10 @@ on every login, so no restart is needed.
   jitter buffer, `echo_cancel = "off" | "speex"` (`speex` needs the optional speexdsp package).
 - `[auth]` `session_hours`, `users_file`, `secret_file`, `secure_cookie`.
 - `[session]` `idle_timeout_s` ends a session that receives no client audio.
+- `[session]` `ring_timeout_s` (default 30) — how long a "wait for confirmation" ring waits
+  before timing out.
+- `public_url` (top-level, not under a section) — optional link included in the
+  host-initiated-call Telegram message; unset by default.
 - `settings_file` (top-level, not under a section) — where the admin Settings page's Telegram
   bot token/chat ID are saved; defaults next to `config.toml` but the example config points it
   at `/var/lib/live-intercom/settings.toml` since `/etc` is read-only to the service.
