@@ -17,6 +17,7 @@ def test_defaults(tmp_path: Path):
     assert cfg.auth.session_hours == 12
     assert cfg.auth.secure_cookie is False
     assert cfg.session.idle_timeout_s == 10.0
+    assert cfg.session.ring_timeout_s == 30.0
     assert cfg.auth.users_file == tmp_path / "users.toml"
     assert cfg.settings_file == tmp_path / "settings.toml"
 
@@ -50,3 +51,10 @@ def test_invalid_echo_cancel_rejected(tmp_path: Path):
     path.write_text('[audio]\necho_cancel = "magic"\n')
     with pytest.raises(ValueError):
         load_config(path)
+
+
+def test_ring_timeout_override(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text("[session]\nring_timeout_s = 45\n")
+    cfg = load_config(path)
+    assert cfg.session.ring_timeout_s == 45.0

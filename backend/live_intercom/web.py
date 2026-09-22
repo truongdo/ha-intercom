@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 from typing import Callable
 from urllib.parse import urlsplit
@@ -56,7 +57,24 @@ def create_app(
         max_age_s=config.auth.session_hours * 3600,
     )
     limiter = RateLimiter()
-    manager = SessionManager(device_factory, config.audio.jitter_ms, config.session.idle_timeout_s)
+
+    def get_pickup_mode() -> str:
+        try:
+            return load_settings(config.settings_file).pickup_mode
+        except (OSError, ValueError):
+            log.exception(
+                "cannot read settings file %s for pickup_mode; defaulting to auto",
+                config.settings_file,
+            )
+            return "auto"
+
+    manager = SessionManager(
+        device_factory,
+        config.audio.jitter_ms,
+        config.session.idle_timeout_s,
+        pickup_mode_provider=get_pickup_mode,
+        ring_timeout_s=config.session.ring_timeout_s,
+    )
 
     def current_user(conn: HTTPConnection) -> str | None:
         token = conn.cookies.get(COOKIE)
@@ -167,6 +185,23 @@ def create_app(
         )
         return JSONResponse({"ok": ok, "reason": reason})
 
+    async def handle_call_decision(request: Request, act: Callable[[], bool]) -> Response:
+        settings = await load_admin_settings()
+        if isinstance(settings, Response):
+            return settings
+        token = request.query_params.get("token", "")
+        if not settings.call_confirm_token or not hmac.compare_digest(token, settings.call_confirm_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if act():
+            return JSONResponse({"ok": True})
+        return JSONResponse({"ok": False, "reason": "no_pending_call"})
+
+    async def call_confirm(request: Request) -> Response:
+        return await handle_call_decision(request, manager.confirm)
+
+    async def call_reject(request: Request) -> Response:
+        return await handle_call_decision(request, manager.reject)
+
     async def ws_endpoint(ws: WebSocket) -> None:
         if not origin_allowed(ws) or current_user(ws) is None:
             await ws.close(code=1008)
@@ -180,6 +215,8 @@ def create_app(
         Route("/api/admin/settings", get_admin_settings, methods=["GET"]),
         Route("/api/admin/settings", save_admin_settings, methods=["POST"]),
         Route("/api/admin/telegram/test", test_telegram, methods=["POST"]),
+        Route("/api/call/confirm", call_confirm, methods=["GET"]),
+        Route("/api/call/reject", call_reject, methods=["GET"]),
         WebSocketRoute("/ws", ws_endpoint),
     ]
     if config.static_dir.is_dir():

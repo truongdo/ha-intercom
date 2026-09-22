@@ -5,7 +5,7 @@ from starlette.websockets import WebSocketDisconnect
 from live_intercom.auth import hash_password, save_user
 from live_intercom.config import AudioConfig, AuthConfig, Config, SessionConfig
 from live_intercom.protocol import ready_message
-from live_intercom.settings import save_telegram_settings
+from live_intercom.settings import save_call_confirm_token, save_call_settings, save_telegram_settings
 from live_intercom.web import COOKIE, create_app
 from tests.fakes import FakeDevice
 
@@ -281,3 +281,54 @@ def test_telegram_test_returns_503_when_settings_file_corrupted(client, tmp_path
     response = client.post("/api/admin/telegram/test")
     assert response.status_code == 503
     assert response.json() == {"error": "settings_unavailable"}
+
+
+def test_call_confirm_requires_matching_token(client, tmp_path):
+    login(client)
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    assert client.get("/api/call/confirm").status_code == 401
+    assert client.get("/api/call/confirm?token=wrong").status_code == 401
+    response = client.get("/api/call/confirm?token=secret-token")
+    assert response.status_code == 200
+
+
+def test_call_confirm_with_no_token_configured_always_401(client):
+    assert client.get("/api/call/confirm?token=").status_code == 401
+    assert client.get("/api/call/confirm?token=anything").status_code == 401
+
+
+def test_call_confirm_with_nothing_pending(client, tmp_path):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    response = client.get("/api/call/confirm?token=secret-token")
+    assert response.status_code == 200
+    assert response.json() == {"ok": False, "reason": "no_pending_call"}
+
+
+def test_call_reject_requires_matching_token(client, tmp_path):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    assert client.get("/api/call/reject?token=wrong").status_code == 401
+    response = client.get("/api/call/reject?token=secret-token")
+    assert response.status_code == 200
+
+
+def test_call_confirm_via_http_makes_ringing_session_go_live(client, tmp_path):
+    save_call_settings(tmp_path / "settings.toml", "confirm")
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    login(client)
+    with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
+        assert ws.receive_json() == {"type": "ringing"}
+        response = client.get("/api/call/confirm?token=secret-token")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        assert ws.receive_json() == ready_message()
+
+
+def test_call_reject_via_http_ends_ringing_session(client, tmp_path):
+    save_call_settings(tmp_path / "settings.toml", "confirm")
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    login(client)
+    with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
+        assert ws.receive_json() == {"type": "ringing"}
+        response = client.get("/api/call/reject?token=secret-token")
+        assert response.json() == {"ok": True}
+        assert ws.receive_json() == {"type": "rejected", "reason": "declined"}

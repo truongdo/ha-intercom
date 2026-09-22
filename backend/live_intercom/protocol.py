@@ -8,3 +8,11 @@ SILENCE = bytes(FRAME_BYTES)
 
 def ready_message() -> dict:
     return {"type": "ready", "rate": RATE, "channels": CHANNELS, "frame_ms": FRAME_MS}
+
+
+def ringing_message() -> dict:
+    return {"type": "ringing"}
+
+
+def rejected_message(reason: str) -> dict:
+    return {"type": "rejected", "reason": reason}

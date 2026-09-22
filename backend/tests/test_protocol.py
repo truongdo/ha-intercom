@@ -15,3 +15,12 @@ def test_ready_message():
         "channels": 1,
         "frame_ms": 20,
     }
+
+
+def test_ringing_message():
+    assert protocol.ringing_message() == {"type": "ringing"}
+
+
+def test_rejected_message():
+    assert protocol.rejected_message("declined") == {"type": "rejected", "reason": "declined"}
+    assert protocol.rejected_message("timeout") == {"type": "rejected", "reason": "timeout"}

@@ -25,6 +25,7 @@ class AuthConfig:
 @dataclass(frozen=True)
 class SessionConfig:
     idle_timeout_s: float = 10.0
+    ring_timeout_s: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -70,5 +71,8 @@ def load_config(path: Path) -> Config:
             session_hours=float(auth_raw.get("session_hours", 12)),
             secure_cookie=bool(auth_raw.get("secure_cookie", False)),
         ),
-        session=SessionConfig(idle_timeout_s=float(session_raw.get("idle_timeout_s", 10.0))),
+        session=SessionConfig(
+            idle_timeout_s=float(session_raw.get("idle_timeout_s", 10.0)),
+            ring_timeout_s=float(session_raw.get("ring_timeout_s", 30.0)),
+        ),
     )

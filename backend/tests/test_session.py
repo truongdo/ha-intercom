@@ -14,13 +14,21 @@ from tests.fakes import FakeDevice, wait_for
 FRAME = bytes(range(256)) * 2 + bytes(128)  # 640 bytes
 
 
-def make_client(factory, idle=5.0):
-    manager = SessionManager(factory, jitter_ms=60, idle_timeout_s=idle)
+def make_client(factory, idle=5.0, pickup_mode="auto", ring_timeout=5.0):
+    manager = SessionManager(
+        factory,
+        jitter_ms=60,
+        idle_timeout_s=idle,
+        pickup_mode_provider=lambda: pickup_mode,
+        ring_timeout_s=ring_timeout,
+    )
 
     async def endpoint(ws):
         await manager.handle(ws)
 
-    return TestClient(Starlette(routes=[WebSocketRoute("/ws", endpoint)]))
+    client = TestClient(Starlette(routes=[WebSocketRoute("/ws", endpoint)]))
+    client.manager = manager  # exposed so tests can call confirm()/reject() directly
+    return client
 
 
 def test_ready_then_mic_frames_reach_client():
@@ -182,3 +190,72 @@ def test_hung_stop_does_not_wedge_the_lock(monkeypatch):
             raise AssertionError("lock stayed held by hung stop")
     finally:
         release.set()
+
+
+def test_confirm_mode_rings_then_confirms_to_live():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm") as client:
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == {"type": "ringing"}
+            frame = device.pull_speaker()
+            assert frame != bytes(len(frame))  # ringtone, not silence
+            assert client.manager.confirm() is True
+            assert ws.receive_json() == ready_message()
+            device.emit_mic(FRAME)
+            assert ws.receive_bytes() == FRAME
+
+
+def test_confirm_mode_reject_ends_session():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm") as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ringing
+            assert client.manager.reject() is True
+            assert ws.receive_json() == {"type": "rejected", "reason": "declined"}
+        assert wait_for(lambda: device.stopped)
+
+
+def test_confirm_mode_timeout_rejects():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm", ring_timeout=0.2) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ringing
+            assert ws.receive_json() == {"type": "rejected", "reason": "timeout"}
+        assert wait_for(lambda: device.stopped)
+
+
+def test_confirm_mode_cancel_while_ringing():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm") as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ringing
+            ws.send_json({"type": "stop"})
+        assert wait_for(lambda: device.stopped)
+
+
+def test_confirm_with_nothing_pending_returns_false():
+    with make_client(lambda: FakeDevice(), pickup_mode="auto") as client:
+        assert client.manager.confirm() is False
+        assert client.manager.reject() is False
+
+
+def test_double_confirm_second_call_returns_false():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm") as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ringing
+            assert client.manager.confirm() is True
+            assert client.manager.confirm() is False  # already resolved
+            ws.receive_json()  # ready
+
+
+def test_idle_timeout_not_triggered_by_long_ring():
+    device = FakeDevice()
+    # idle_timeout_s (0.3) is shorter than how long we simulate ringing before confirming,
+    # proving idle-timeout only starts counting once the call goes live, not from ring-start.
+    with make_client(lambda: device, idle=0.3, pickup_mode="confirm", ring_timeout=5.0) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ringing
+            time.sleep(0.5)
+            assert client.manager.confirm() is True
+            assert ws.receive_json() == ready_message()  # not an idle_timeout error
