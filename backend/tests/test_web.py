@@ -16,6 +16,7 @@ def make_config(tmp_path, secure_cookie=False):
         host="127.0.0.1",
         port=8000,
         static_dir=tmp_path / "static",
+        settings_file=tmp_path / "settings.toml",
         audio=AudioConfig(),
         auth=AuthConfig(
             users_file=users,

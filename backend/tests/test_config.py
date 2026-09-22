@@ -18,6 +18,7 @@ def test_defaults(tmp_path: Path):
     assert cfg.auth.secure_cookie is False
     assert cfg.session.idle_timeout_s == 10.0
     assert cfg.auth.users_file == tmp_path / "users.toml"
+    assert cfg.settings_file == tmp_path / "settings.toml"
 
 
 def test_overrides_and_relative_paths(tmp_path: Path):
@@ -35,6 +36,13 @@ def test_overrides_and_relative_paths(tmp_path: Path):
     assert cfg.audio.echo_cancel == "speex"
     assert cfg.auth.users_file == Path("/etc/u.toml")
     assert cfg.auth.secure_cookie is True
+
+
+def test_settings_file_override(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text('settings_file = "/etc/settings.toml"\n')
+    cfg = load_config(path)
+    assert cfg.settings_file == Path("/etc/settings.toml")
 
 
 def test_invalid_echo_cancel_rejected(tmp_path: Path):

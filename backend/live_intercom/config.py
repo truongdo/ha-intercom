@@ -32,6 +32,7 @@ class Config:
     host: str
     port: int
     static_dir: Path
+    settings_file: Path
     audio: AudioConfig
     auth: AuthConfig
     session: SessionConfig
@@ -61,6 +62,7 @@ def load_config(path: Path) -> Config:
         host=raw.get("host", "127.0.0.1"),
         port=int(raw.get("port", 8000)),
         static_dir=resolve(raw.get("static_dir"), "static"),
+        settings_file=resolve(raw.get("settings_file"), "settings.toml"),
         audio=audio,
         auth=AuthConfig(
             users_file=resolve(auth_raw.get("users_file"), "users.toml"),
