@@ -1,4 +1,5 @@
 static_dir = "../frontend/dist"
+settings_file = ".dev/settings.toml"
 
 [audio]
 device_match = "Jabra"

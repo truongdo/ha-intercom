@@ -68,7 +68,7 @@ function showAdmin(username: string): void {
   const token = el("input", { type: "text", placeholder: "Bot token" });
   const status = el("p", { className: "status" });
   const testButton = el("button", { type: "button", textContent: "Send test message" });
-  const back = el("button", { className: "link", textContent: "Back" });
+  const back = el("button", { type: "button", className: "link", textContent: "Back" });
   const form = el(
     "form",
     {},
@@ -81,10 +81,14 @@ function showAdmin(username: string): void {
     back,
   );
 
-  void getAdminSettings().then((settings) => {
-    chatId.value = settings.chat_id;
-    token.value = settings.token_set ? settings.token_masked : "";
-  });
+  void getAdminSettings()
+    .then((settings) => {
+      chatId.value = settings.chat_id;
+      token.value = settings.token_set ? settings.token_masked : "";
+    })
+    .catch(() => {
+      status.textContent = "Could not load settings.";
+    });
 
   form.onsubmit = async (event) => {
     event.preventDefault();

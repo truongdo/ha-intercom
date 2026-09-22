@@ -1,6 +1,7 @@
 host = "127.0.0.1"
 port = 8000
 static_dir = "/opt/live-com-ha/frontend-dist"
+settings_file = "/var/lib/live-intercom/settings.toml"
 
 [audio]
 device_match = "Jabra"

@@ -25,6 +25,7 @@ wrong the first time. Last verified 2026-09-21 on `root@192.168.0.17`.
 | `/etc/live-intercom/config.toml` | the live configuration; created once from `deploy/config.example.toml`, never overwritten by a redeploy |
 | `/var/lib/live-intercom/users.toml` | users and argon2 password hashes (owner `intercom`, mode 0600) |
 | `/var/lib/live-intercom/secret.key` | cookie-signing key, created on first start (mode 0600) |
+| `/var/lib/live-intercom/settings.toml` | admin-editable Telegram settings (bot token, chat ID); created on first Settings-page save (owner `intercom`, mode 0600) |
 | `/etc/systemd/system/live-intercom.service` | the service, runs as user `intercom` (group `audio`) on `127.0.0.1:8000` |
 
 The service binds to loopback only. It is reachable through the Cloudflare tunnel, or from
@@ -88,6 +89,7 @@ No restart is needed; the service reads the file on every login. To remove a use
 host = "127.0.0.1"
 port = 8000
 static_dir = "/opt/live-com-ha/frontend-dist"
+settings_file = "/var/lib/live-intercom/settings.toml"
 
 [audio]
 device_match = "Jabra"   # substring of the ALSA device name, case-insensitive
@@ -117,6 +119,14 @@ idle_timeout_s = 10      # a session with no client audio for this long is ended
 - `/etc/live-intercom/config.toml` is created from the example only once and never
   overwritten, so changing the example does not change an existing host. Edit the live file
   and run `systemctl restart live-intercom`.
+
+### `settings_file`
+
+- `config.example.toml` now sets `settings_file`, but (like `secure_cookie` above)
+  `/etc/live-intercom/config.toml` on an already-deployed host is created once and never
+  overwritten by a redeploy. Add `settings_file = "/var/lib/live-intercom/settings.toml"` to
+  the live file by hand and restart — otherwise the admin Settings page's Save fails with
+  `settings_unavailable`, since `/etc` is read-only to the service (`ProtectSystem=strict`).
 
 ### Changing the USB audio device
 

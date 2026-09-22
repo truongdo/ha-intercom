@@ -89,6 +89,7 @@ Copy `deploy/config.example.toml`. The main options:
 | Option | Default | Meaning |
 |---|---|---|
 | `host`, `port` | `127.0.0.1`, `8000` | where the service listens |
+| `settings_file` | next to `config.toml` | admin-editable Telegram settings (bot token, chat ID) — see the deployment guide |
 | `[audio] device_match` | `"Jabra"` | substring of the ALSA device name |
 | `[audio] echo_cancel` | `"off"` | `"speex"` enables the server-side canceller |
 | `[audio] jitter_ms` | `60` | playback buffer; raise if audio is choppy |
