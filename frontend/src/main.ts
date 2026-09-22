@@ -1,5 +1,15 @@
 import "./style.css";
-import { getMe, login, logout, getAdminSettings, saveAdminSettings, sendTelegramTest } from "./api";
+import {
+  getMe,
+  login,
+  logout,
+  getAdminSettings,
+  saveAdminSettings,
+  sendTelegramTest,
+  saveCallSettings,
+  regenerateCallToken,
+  type PickupMode,
+} from "./api";
 import { Intercom, type IntercomState } from "./intercom";
 
 const app = document.getElementById("app")!;
@@ -34,6 +44,7 @@ function showLogin(message = ""): void {
 const LABELS: Record<IntercomState, string> = {
   idle: "Start talking",
   connecting: "Connecting…",
+  ringing: "Ringing…",
   live: "Live: tap to stop",
   busy: "In use",
   error: "Start talking",
@@ -48,7 +59,7 @@ function showIntercom(username: string, audioAvailable: boolean): void {
 
   let running = false;
   const intercom = new Intercom((state, detail) => {
-    running = state === "live" || state === "connecting";
+    running = state === "live" || state === "connecting" || state === "ringing";
     button.textContent = LABELS[state];
     button.dataset.state = state;
     button.disabled = state === "connecting";
@@ -69,10 +80,11 @@ function showAdmin(username: string): void {
   const status = el("p", { className: "status" });
   const testButton = el("button", { type: "button", textContent: "Send test message" });
   const back = el("button", { type: "button", className: "link", textContent: "Back" });
-  const form = el(
+  const telegramForm = el(
     "form",
     {},
     el("h1", { textContent: "Settings" }),
+    el("h2", { textContent: "Telegram" }),
     chatId,
     token,
     el("button", { textContent: "Save" }),
@@ -81,16 +93,48 @@ function showAdmin(username: string): void {
     back,
   );
 
+  const pickupMode = el(
+    "select",
+    {},
+    el("option", { value: "auto", textContent: "Automatic pickup" }),
+    el("option", { value: "confirm", textContent: "Wait for confirmation" }),
+  );
+  const callStatus = el("p", { className: "status" });
+  const tokenDisplay = el("input", { type: "text", readOnly: true });
+  const regenButton = el("button", { type: "button", textContent: "Regenerate" });
+  const confirmUrl = el("p", { className: "status" });
+  const rejectUrl = el("p", { className: "status" });
+  const callForm = el(
+    "form",
+    {},
+    el("h2", { textContent: "Phone-like calls" }),
+    pickupMode,
+    el("button", { textContent: "Save" }),
+    tokenDisplay,
+    regenButton,
+    confirmUrl,
+    rejectUrl,
+    callStatus,
+  );
+
+  const showToken = (callConfirmToken: string): void => {
+    tokenDisplay.value = callConfirmToken;
+    confirmUrl.textContent = `Confirm: ${location.origin}/api/call/confirm?token=${callConfirmToken}`;
+    rejectUrl.textContent = `Reject: ${location.origin}/api/call/reject?token=${callConfirmToken}`;
+  };
+
   void getAdminSettings()
     .then((settings) => {
       chatId.value = settings.chat_id;
       token.value = settings.token_set ? settings.token_masked : "";
+      pickupMode.value = settings.pickup_mode;
+      showToken(settings.call_confirm_token);
     })
     .catch(() => {
       status.textContent = "Could not load settings.";
     });
 
-  form.onsubmit = async (event) => {
+  telegramForm.onsubmit = async (event) => {
     event.preventDefault();
     status.textContent = "Saving…";
     const result = await saveAdminSettings(chatId.value, token.value).catch(() => "error" as const);
@@ -107,7 +151,27 @@ function showAdmin(username: string): void {
   };
   back.onclick = () => void start();
 
-  app.replaceChildren(form);
+  callForm.onsubmit = async (event) => {
+    event.preventDefault();
+    callStatus.textContent = "Saving…";
+    const result = await saveCallSettings(pickupMode.value as PickupMode).catch(() => "error" as const);
+    callStatus.textContent =
+      result === "ok" ? "Saved." :
+      result === "invalid_pickup_mode" ? "Invalid mode." :
+      "Could not save.";
+  };
+  regenButton.onclick = async () => {
+    callStatus.textContent = "Regenerating…";
+    const newToken = await regenerateCallToken().catch(() => null);
+    if (newToken) {
+      showToken(newToken);
+      callStatus.textContent = "Regenerated.";
+    } else {
+      callStatus.textContent = "Could not regenerate.";
+    }
+  };
+
+  app.replaceChildren(telegramForm, callForm);
 }
 
 async function start(): Promise<void> {

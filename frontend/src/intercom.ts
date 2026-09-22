@@ -3,7 +3,7 @@ import { Framer, StreamResampler, floatToInt16, int16ToFloat } from "./framing";
 const WIRE_RATE = 16000;
 const FRAME_SAMPLES = 320;
 
-export type IntercomState = "idle" | "connecting" | "live" | "busy" | "error";
+export type IntercomState = "idle" | "connecting" | "ringing" | "live" | "busy" | "error";
 type OnState = (state: IntercomState, detail?: string) => void;
 
 const ERROR_TEXT: Record<string, string> = {
@@ -11,6 +11,8 @@ const ERROR_TEXT: Record<string, string> = {
   device_lost: "The audio device was disconnected.",
   device_error: "The audio device reported an error.",
   idle_timeout: "Session ended: no audio received.",
+  declined: "Call was declined.",
+  timeout: "No answer.",
 };
 
 export class Intercom {
@@ -70,8 +72,12 @@ export class Intercom {
   private async onControl(message: { type: string; reason?: string }): Promise<void> {
     if (message.type === "ready") {
       await this.startAudio();
+    } else if (message.type === "ringing") {
+      this.onState("ringing");
     } else if (message.type === "busy") {
       this.finish("busy", "The intercom is in use by another client.");
+    } else if (message.type === "rejected") {
+      this.finish("error", ERROR_TEXT[message.reason ?? ""] ?? "Call ended.");
     } else if (message.type === "error") {
       this.finish("error", ERROR_TEXT[message.reason ?? ""] ?? "Session error.");
     }

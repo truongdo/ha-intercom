@@ -32,6 +32,8 @@ export interface AdminSettings {
   chat_id: string;
   token_masked: string;
   token_set: boolean;
+  pickup_mode: "auto" | "confirm";
+  call_confirm_token: string;
 }
 
 export async function getAdminSettings(): Promise<AdminSettings> {
@@ -62,4 +64,26 @@ export async function sendTelegramTest(): Promise<TelegramTestResult> {
   const response = await fetch("api/admin/telegram/test", { method: "POST" });
   if (!response.ok) return { ok: false, reason: "error" };
   return response.json();
+}
+
+export type PickupMode = "auto" | "confirm";
+
+export type SaveCallSettingsResult = "ok" | "invalid_pickup_mode" | "error";
+
+export async function saveCallSettings(pickupMode: PickupMode): Promise<SaveCallSettingsResult> {
+  const response = await fetch("api/admin/call-settings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pickup_mode: pickupMode }),
+  });
+  if (response.ok) return "ok";
+  const body = await response.json().catch(() => ({}));
+  return body.error === "invalid_pickup_mode" ? body.error : "error";
+}
+
+export async function regenerateCallToken(): Promise<string | null> {
+  const response = await fetch("api/admin/call-token/regenerate", { method: "POST" });
+  if (!response.ok) return null;
+  const body = await response.json();
+  return body.call_confirm_token as string;
 }
