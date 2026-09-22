@@ -176,7 +176,11 @@ def test_admin_settings_requires_login(client):
 def test_admin_settings_defaults_when_unset(client):
     login(client)
     body = client.get("/api/admin/settings").json()
-    assert body == {"chat_id": "", "token_masked": "", "token_set": False}
+    assert body["chat_id"] == ""
+    assert body["token_masked"] == ""
+    assert body["token_set"] is False
+    assert body["pickup_mode"] == "auto"
+    assert len(body["call_confirm_token"]) > 20  # auto-generated on first GET
 
 
 def test_admin_settings_save_and_roundtrip(client):
@@ -187,7 +191,9 @@ def test_admin_settings_save_and_roundtrip(client):
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     body = client.get("/api/admin/settings").json()
-    assert body == {"chat_id": "-1001234567890", "token_masked": "••••EFGH", "token_set": True}
+    assert body["chat_id"] == "-1001234567890"
+    assert body["token_masked"] == "••••EFGH"
+    assert body["token_set"] is True
 
 
 def test_admin_settings_keeps_token_when_masked_value_resubmitted(client):
@@ -197,7 +203,9 @@ def test_admin_settings_keeps_token_when_masked_value_resubmitted(client):
     response = client.post("/api/admin/settings", json={"chat_id": "-2", "token": masked})
     assert response.status_code == 200
     body = client.get("/api/admin/settings").json()
-    assert body == {"chat_id": "-2", "token_masked": "••••EFGH", "token_set": True}
+    assert body["chat_id"] == "-2"
+    assert body["token_masked"] == "••••EFGH"
+    assert body["token_set"] is True
 
 
 def test_admin_settings_rejects_invalid_chat_id(client):
@@ -332,3 +340,47 @@ def test_call_reject_via_http_ends_ringing_session(client, tmp_path):
         response = client.get("/api/call/reject?token=secret-token")
         assert response.json() == {"ok": True}
         assert ws.receive_json() == {"type": "rejected", "reason": "declined"}
+
+
+def test_call_settings_requires_login(client):
+    assert client.post("/api/admin/call-settings", json={"pickup_mode": "confirm"}).status_code == 401
+    assert client.post("/api/admin/call-token/regenerate").status_code == 401
+
+
+def test_call_settings_save_and_roundtrip(client):
+    login(client)
+    response = client.post("/api/admin/call-settings", json={"pickup_mode": "confirm"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert client.get("/api/admin/settings").json()["pickup_mode"] == "confirm"
+
+
+def test_call_settings_rejects_invalid_mode(client):
+    login(client)
+    response = client.post("/api/admin/call-settings", json={"pickup_mode": "always"})
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_pickup_mode"}
+
+
+def test_call_settings_rejects_bad_body(client):
+    login(client)
+    assert client.post("/api/admin/call-settings", content=b"not json").status_code == 400
+    assert client.post("/api/admin/call-settings", json={}).status_code == 400
+
+
+def test_call_token_regenerate_returns_new_token_each_time(client):
+    login(client)
+    first = client.get("/api/admin/settings").json()["call_confirm_token"]
+    response = client.post("/api/admin/call-token/regenerate")
+    assert response.status_code == 200
+    second = response.json()["call_confirm_token"]
+    assert second != first
+    assert len(second) > 20
+    assert client.get("/api/admin/settings").json()["call_confirm_token"] == second
+
+
+def test_admin_settings_get_auto_generates_token_only_once(client):
+    login(client)
+    first = client.get("/api/admin/settings").json()["call_confirm_token"]
+    second = client.get("/api/admin/settings").json()["call_confirm_token"]
+    assert first == second  # not regenerated on every GET, only when unset

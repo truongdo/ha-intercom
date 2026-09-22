@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+from dataclasses import replace
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -24,7 +25,14 @@ from .auth import (
 )
 from .config import Config
 from .session import SessionManager
-from .settings import load_settings, mask_token, save_telegram_settings
+from .settings import (
+    generate_call_confirm_token,
+    load_settings,
+    mask_token,
+    save_call_confirm_token,
+    save_call_settings,
+    save_telegram_settings,
+)
 from .telegram import send_message
 
 log = logging.getLogger(__name__)
@@ -141,11 +149,21 @@ def create_app(
         settings = await load_admin_settings()
         if isinstance(settings, Response):
             return settings
+        if not settings.call_confirm_token:
+            token = generate_call_confirm_token()
+            try:
+                await run_in_threadpool(save_call_confirm_token, config.settings_file, token)
+            except OSError:
+                log.exception("cannot write settings file %s", config.settings_file)
+                return JSONResponse({"error": "settings_unavailable"}, status_code=503)
+            settings = replace(settings, call_confirm_token=token)
         return JSONResponse(
             {
                 "chat_id": settings.telegram_chat_id,
                 "token_masked": mask_token(settings.telegram_bot_token),
                 "token_set": bool(settings.telegram_bot_token),
+                "pickup_mode": settings.pickup_mode,
+                "call_confirm_token": settings.call_confirm_token,
             }
         )
 
@@ -171,6 +189,34 @@ def create_app(
             log.exception("cannot write settings file %s", config.settings_file)
             return JSONResponse({"error": "settings_unavailable"}, status_code=503)
         return JSONResponse({"ok": True})
+
+    async def save_call_settings_route(request: Request) -> Response:
+        if current_user(request) is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            body = await request.json()
+            pickup_mode = str(body["pickup_mode"])
+        except (ValueError, KeyError, TypeError):
+            return JSONResponse({"error": "bad_request"}, status_code=400)
+        try:
+            await run_in_threadpool(save_call_settings, config.settings_file, pickup_mode)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except OSError:
+            log.exception("cannot write settings file %s", config.settings_file)
+            return JSONResponse({"error": "settings_unavailable"}, status_code=503)
+        return JSONResponse({"ok": True})
+
+    async def regenerate_call_token(request: Request) -> Response:
+        if current_user(request) is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        token = generate_call_confirm_token()
+        try:
+            await run_in_threadpool(save_call_confirm_token, config.settings_file, token)
+        except OSError:
+            log.exception("cannot write settings file %s", config.settings_file)
+            return JSONResponse({"error": "settings_unavailable"}, status_code=503)
+        return JSONResponse({"call_confirm_token": token})
 
     async def test_telegram(request: Request) -> Response:
         if current_user(request) is None:
@@ -215,6 +261,8 @@ def create_app(
         Route("/api/admin/settings", get_admin_settings, methods=["GET"]),
         Route("/api/admin/settings", save_admin_settings, methods=["POST"]),
         Route("/api/admin/telegram/test", test_telegram, methods=["POST"]),
+        Route("/api/admin/call-settings", save_call_settings_route, methods=["POST"]),
+        Route("/api/admin/call-token/regenerate", regenerate_call_token, methods=["POST"]),
         Route("/api/call/confirm", call_confirm, methods=["GET"]),
         Route("/api/call/reject", call_reject, methods=["GET"]),
         WebSocketRoute("/ws", ws_endpoint),
