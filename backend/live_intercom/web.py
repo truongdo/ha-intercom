@@ -26,6 +26,7 @@ from .auth import (
 from .config import Config
 from .session import SessionManager
 from .settings import (
+    Settings,
     generate_call_confirm_token,
     load_settings,
     mask_token,
@@ -155,8 +156,8 @@ def create_app(
                 await run_in_threadpool(save_call_confirm_token, config.settings_file, token)
             except OSError:
                 log.exception("cannot write settings file %s", config.settings_file)
-                return JSONResponse({"error": "settings_unavailable"}, status_code=503)
-            settings = replace(settings, call_confirm_token=token)
+            else:
+                settings = replace(settings, call_confirm_token=token)
         return JSONResponse(
             {
                 "chat_id": settings.telegram_chat_id,
@@ -235,8 +236,9 @@ def create_app(
         settings = await load_admin_settings()
         if isinstance(settings, Response):
             return settings
-        token = request.query_params.get("token", "")
-        if not settings.call_confirm_token or not hmac.compare_digest(token, settings.call_confirm_token):
+        supplied = request.query_params.get("token", "").encode()
+        configured = settings.call_confirm_token.encode()
+        if not configured or not hmac.compare_digest(supplied, configured):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if act():
             return JSONResponse({"ok": True})

@@ -30,6 +30,7 @@ def cmd_serve(cfg: Config) -> int:
         proxy_headers=True,
         forwarded_allow_ips="127.0.0.1",
         log_level="info",
+        access_log=False,
     )
     return 0
 

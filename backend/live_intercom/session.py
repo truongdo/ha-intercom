@@ -66,7 +66,8 @@ class SessionManager:
             if self._pending_event is None or self._loop is None or self._pending_decision is not None:
                 return False
             self._pending_decision = decision
-        self._loop.call_soon_threadsafe(self._pending_event.set)
+            loop, event = self._loop, self._pending_event
+        loop.call_soon_threadsafe(event.set)
         return True
 
     async def handle(self, ws: WebSocket) -> None:

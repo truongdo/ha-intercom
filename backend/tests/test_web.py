@@ -259,6 +259,21 @@ def test_admin_settings_get_returns_503_when_settings_file_corrupted(client, tmp
     assert response.json() == {"error": "settings_unavailable"}
 
 
+def test_admin_settings_get_degrades_gracefully_when_token_write_fails(client, monkeypatch):
+    login(client)
+
+    def boom(path, token):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr("live_intercom.web.save_call_confirm_token", boom)
+    response = client.get("/api/admin/settings")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["call_confirm_token"] == ""
+    assert body["chat_id"] == ""
+    assert body["token_set"] is False
+
+
 def test_admin_settings_save_returns_503_when_load_fails(client, monkeypatch):
     login(client)
 
@@ -310,6 +325,14 @@ def test_call_confirm_with_nothing_pending(client, tmp_path):
     response = client.get("/api/call/confirm?token=secret-token")
     assert response.status_code == 200
     assert response.json() == {"ok": False, "reason": "no_pending_call"}
+
+
+def test_call_confirm_rejects_non_ascii_token_without_crashing(client, tmp_path):
+    login(client)
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    response = client.get("/api/call/confirm?token=caf%C3%A9")  # URL-encoded "café"
+    assert response.status_code == 401
+    assert response.json() == {"error": "unauthorized"}
 
 
 def test_call_reject_requires_matching_token(client, tmp_path):
