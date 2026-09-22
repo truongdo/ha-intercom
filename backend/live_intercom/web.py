@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Callable
 from urllib.parse import urlsplit
@@ -22,6 +23,8 @@ from .auth import (
 )
 from .config import Config
 from .session import SessionManager
+from .settings import Settings, load_settings, mask_token, save_settings
+from .telegram import send_message
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +108,51 @@ def create_app(
             {"username": user, "audio_available": available}
         )
 
+    async def get_admin_settings(request: Request) -> Response:
+        if current_user(request) is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        settings = await run_in_threadpool(load_settings, config.settings_file)
+        return JSONResponse(
+            {
+                "chat_id": settings.telegram_chat_id,
+                "token_masked": mask_token(settings.telegram_bot_token),
+                "token_set": bool(settings.telegram_bot_token),
+            }
+        )
+
+    async def save_admin_settings(request: Request) -> Response:
+        if current_user(request) is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            body = await request.json()
+            chat_id = str(body["chat_id"]).strip()
+            token = str(body["token"]).strip()
+        except (ValueError, KeyError, TypeError):
+            return JSONResponse({"error": "bad_request"}, status_code=400)
+        current = await run_in_threadpool(load_settings, config.settings_file)
+        if current.telegram_bot_token and token == mask_token(current.telegram_bot_token):
+            token = current.telegram_bot_token
+        try:
+            await run_in_threadpool(
+                save_settings,
+                config.settings_file,
+                Settings(telegram_bot_token=token, telegram_chat_id=chat_id),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True})
+
+    async def test_telegram(request: Request) -> Response:
+        if current_user(request) is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        settings = await run_in_threadpool(load_settings, config.settings_file)
+        if not settings.telegram_bot_token or not settings.telegram_chat_id:
+            return JSONResponse({"ok": False, "reason": "not_configured"})
+        ok, reason = await asyncio.to_thread(
+            send_message, settings.telegram_bot_token, settings.telegram_chat_id, "Live Intercom test message."
+        )
+        return JSONResponse({"ok": ok, "reason": reason})
+
     async def ws_endpoint(ws: WebSocket) -> None:
         if not origin_allowed(ws) or current_user(ws) is None:
             await ws.close(code=1008)
@@ -115,6 +163,9 @@ def create_app(
         Route("/login", login, methods=["POST"]),
         Route("/logout", logout, methods=["POST"]),
         Route("/api/me", me, methods=["GET"]),
+        Route("/api/admin/settings", get_admin_settings, methods=["GET"]),
+        Route("/api/admin/settings", save_admin_settings, methods=["POST"]),
+        Route("/api/admin/telegram/test", test_telegram, methods=["POST"]),
         WebSocketRoute("/ws", ws_endpoint),
     ]
     if config.static_dir.is_dir():

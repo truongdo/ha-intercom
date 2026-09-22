@@ -5,6 +5,7 @@ from starlette.websockets import WebSocketDisconnect
 from live_intercom.auth import hash_password, save_user
 from live_intercom.config import AudioConfig, AuthConfig, Config, SessionConfig
 from live_intercom.protocol import ready_message
+from live_intercom.settings import Settings, save_settings
 from live_intercom.web import COOKIE, create_app
 from tests.fakes import FakeDevice
 
@@ -164,3 +165,79 @@ def test_rate_limit_key_ignores_cf_connecting_ip(client):
         headers={"cf-connecting-ip": "9.9.9.99"},
     )
     assert blocked.status_code == 429
+
+
+def test_admin_settings_requires_login(client):
+    assert client.get("/api/admin/settings").status_code == 401
+    assert client.post("/api/admin/settings", json={"chat_id": "-1", "token": "1:a"}).status_code == 401
+    assert client.post("/api/admin/telegram/test").status_code == 401
+
+
+def test_admin_settings_defaults_when_unset(client):
+    login(client)
+    body = client.get("/api/admin/settings").json()
+    assert body == {"chat_id": "", "token_masked": "", "token_set": False}
+
+
+def test_admin_settings_save_and_roundtrip(client):
+    login(client)
+    response = client.post(
+        "/api/admin/settings", json={"chat_id": "-1001234567890", "token": "123456:ABCDEFGH"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    body = client.get("/api/admin/settings").json()
+    assert body == {"chat_id": "-1001234567890", "token_masked": "••••EFGH", "token_set": True}
+
+
+def test_admin_settings_keeps_token_when_masked_value_resubmitted(client):
+    login(client)
+    client.post("/api/admin/settings", json={"chat_id": "-1", "token": "123456:ABCDEFGH"})
+    masked = client.get("/api/admin/settings").json()["token_masked"]
+    response = client.post("/api/admin/settings", json={"chat_id": "-2", "token": masked})
+    assert response.status_code == 200
+    body = client.get("/api/admin/settings").json()
+    assert body == {"chat_id": "-2", "token_masked": "••••EFGH", "token_set": True}
+
+
+def test_admin_settings_rejects_invalid_chat_id(client):
+    login(client)
+    response = client.post("/api/admin/settings", json={"chat_id": "not-a-number", "token": "123456:ABCDEFGH"})
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_chat_id"}
+
+
+def test_admin_settings_rejects_invalid_token(client):
+    login(client)
+    response = client.post("/api/admin/settings", json={"chat_id": "-1", "token": "not-a-token"})
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_token"}
+
+
+def test_admin_settings_rejects_bad_body(client):
+    login(client)
+    assert client.post("/api/admin/settings", content=b"not json").status_code == 400
+    assert client.post("/api/admin/settings", json={"chat_id": "-1"}).status_code == 400
+
+
+def test_telegram_test_not_configured(client):
+    login(client)
+    response = client.post("/api/admin/telegram/test")
+    assert response.status_code == 200
+    assert response.json() == {"ok": False, "reason": "not_configured"}
+
+
+def test_telegram_test_success(client, tmp_path, monkeypatch):
+    login(client)
+    save_settings(tmp_path / "settings.toml", Settings(telegram_bot_token="123456:abc", telegram_chat_id="-1"))
+    monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (True, ""))
+    response = client.post("/api/admin/telegram/test")
+    assert response.json() == {"ok": True, "reason": ""}
+
+
+def test_telegram_test_failure(client, tmp_path, monkeypatch):
+    login(client)
+    save_settings(tmp_path / "settings.toml", Settings(telegram_bot_token="123456:abc", telegram_chat_id="-1"))
+    monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (False, "chat not found"))
+    response = client.post("/api/admin/telegram/test")
+    assert response.json() == {"ok": False, "reason": "chat not found"}
