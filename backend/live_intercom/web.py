@@ -261,6 +261,7 @@ def create_app(
         if manager.answer_or_trigger() == "confirmed":
             return JSONResponse({"ok": True, "action": "confirmed"})
         log.info("call press armed a confirmation bypass")
+        await manager.start_waiting_call()
         if not settings.telegram_bot_token or not settings.telegram_chat_id:
             return JSONResponse({"ok": False, "reason": "not_configured", "action": "triggered"})
         text = (

@@ -42,6 +42,9 @@ class SessionManager:
         self._ringtone_file = ringtone_file
         self._bypass_until: float | None = None
         self._active = False
+        # Set while a host-initiated trigger is playing a waiting tone, before anyone has
+        # connected to answer it. See start_waiting_call()/handle() for the takeover protocol.
+        self._waiting_task: asyncio.Task[None] | None = None
         # Serialises device opening with the /api/me PortAudio refresh (see web.py).
         self.device_lock = asyncio.Lock()
         # Set only while a "confirm" mode call is ringing. confirm()/reject() are called from
@@ -98,13 +101,59 @@ class SessionManager:
         self._bypass_until = None
         return armed
 
+    async def start_waiting_call(self) -> bool:
+        """Open the device and play a waiting tone for a host-initiated call, if the
+        device is free. Returns False (does nothing) if a call is already active — the
+        caller still arms the bypass and sends the Telegram notification either way."""
+        if self._active:
+            return False
+        self._active = True
+        self._waiting_task = asyncio.create_task(self._run_waiting_call())
+        return True
+
+    async def _run_waiting_call(self) -> None:
+        # Always the built-in synthesized tone, regardless of `ringtone_file` — a call the
+        # host places should sound different from one it's answering.
+        device: AudioDevice | None = None
+        try:
+            async with self.device_lock:
+                device = await asyncio.to_thread(self._device_factory)
+                tone = RingtoneSource()
+                await asyncio.to_thread(device.start, lambda frame: None, tone.next_frame, lambda reason: None)
+            await asyncio.sleep(BYPASS_WINDOW_S)
+            self._active = False  # nobody answered within the window; free the device
+        except asyncio.CancelledError:
+            # An answering connection is taking over in handle() — it now owns `_active`,
+            # so this must NOT clear it here, or a third connection could sneak in between
+            # this task's cancellation and the claimant setting `_active` again.
+            pass
+        except DeviceUnavailable:
+            log.warning("waiting-call device unavailable")
+            self._active = False
+        except Exception:
+            log.exception("waiting-call device setup failed")
+            self._active = False
+        finally:
+            if device is not None:
+                await _stop_device(device)
+
     async def handle(self, ws: WebSocket) -> None:
         await ws.accept()
         # Single-threaded event loop: no await between check and set, so this is atomic.
         if self._active:
-            await _send_json(ws, {"type": "busy"})
-            await _close(ws)
-            return
+            waiting_task = self._waiting_task
+            if waiting_task is not None and not waiting_task.done():
+                # Claim it synchronously (no await yet) so a concurrent handle() sees
+                # `_waiting_task` already cleared and correctly falls through to "busy"
+                # instead of racing this connection for the same waiting call.
+                self._waiting_task = None
+                waiting_task.cancel()
+                await asyncio.gather(waiting_task, return_exceptions=True)
+                # `_active` stayed True across the handoff — this WS now owns it.
+            else:
+                await _send_json(ws, {"type": "busy"})
+                await _close(ws)
+                return
         self._active = True
         try:
             await self._run(ws)

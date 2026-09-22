@@ -7,10 +7,10 @@ from live_intercom.config import AudioConfig, AuthConfig, Config, SessionConfig
 from live_intercom.protocol import ready_message
 from live_intercom.settings import save_call_confirm_token, save_call_settings, save_telegram_settings
 from live_intercom.web import COOKIE, create_app
-from tests.fakes import FakeDevice
+from tests.fakes import FakeDevice, wait_for
 
 
-def make_config(tmp_path, secure_cookie=False, public_url=""):
+def make_config(tmp_path, secure_cookie=False, public_url="", ringtone_file=None):
     users = tmp_path / "users.toml"
     save_user(users, "alice", hash_password("pw"))
     return Config(
@@ -27,6 +27,7 @@ def make_config(tmp_path, secure_cookie=False, public_url=""):
         ),
         session=SessionConfig(idle_timeout_s=5.0),
         public_url=public_url,
+        ringtone_file=ringtone_file,
     )
 
 
@@ -463,3 +464,80 @@ def test_call_press_arms_bypass_even_when_telegram_not_configured(client, tmp_pa
     login(client)
     with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
         assert ws.receive_json() == ready_message()
+
+
+def test_call_press_trigger_plays_a_waiting_tone(tmp_path):
+    device = FakeDevice()
+    app = create_app(make_config(tmp_path), lambda: device, lambda r: True)
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    with TestClient(app) as c:
+        response = c.get("/api/call/press?token=secret-token")
+        assert response.json()["action"] == "triggered"
+        assert wait_for(lambda: device.started)
+        frame = device.pull_speaker()
+        assert frame != bytes(len(frame))  # tone playing, not silence
+
+
+def test_call_press_trigger_uses_default_tone_not_custom_ringtone_file(tmp_path):
+    import wave
+
+    from live_intercom.audio.ringtone import RingtoneSource
+    from live_intercom.protocol import RATE
+
+    ringtone_path = tmp_path / "custom.wav"
+    custom_cycle = bytes(range(256)) * 20  # distinct from the default synthesized tone
+    with wave.open(str(ringtone_path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(RATE)
+        wav.writeframes(custom_cycle)
+
+    device = FakeDevice()
+    app = create_app(make_config(tmp_path, ringtone_file=ringtone_path), lambda: device, lambda r: True)
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    with TestClient(app) as c:
+        c.get("/api/call/press?token=secret-token")
+        assert wait_for(lambda: device.started)
+        frame = device.pull_speaker()
+        assert frame == RingtoneSource().next_frame()  # the built-in tone, not custom_cycle
+        assert frame != custom_cycle[:640]
+
+
+def test_call_press_waiting_tone_stops_after_bypass_window_expires(tmp_path, monkeypatch):
+    monkeypatch.setattr("live_intercom.session.BYPASS_WINDOW_S", 0.2)
+    device = FakeDevice()
+    app = create_app(make_config(tmp_path), lambda: device, lambda r: True)
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    with TestClient(app) as c:
+        c.get("/api/call/press?token=secret-token")
+        assert wait_for(lambda: device.started)
+        assert wait_for(lambda: device.stopped, timeout=2.0)
+
+
+def test_call_press_ws_connect_takes_over_the_waiting_tone(tmp_path):
+    device = FakeDevice()
+    app = create_app(make_config(tmp_path), lambda: device, lambda r: True)
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    with TestClient(app) as c:
+        response = c.get("/api/call/press?token=secret-token")
+        assert response.json()["action"] == "triggered"
+        assert wait_for(lambda: device.started)
+        login(c)
+        with c.websocket_connect("/ws", headers=cookie_header(c)) as ws:
+            assert ws.receive_json() == ready_message()  # bypass still armed -> straight to live
+
+
+def test_call_press_trigger_skips_tone_when_device_already_busy(tmp_path, monkeypatch):
+    device = FakeDevice()
+    app = create_app(make_config(tmp_path), lambda: device, lambda r: True)
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
+    monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (True, ""))
+    with TestClient(app) as c:
+        login(c)
+        with c.websocket_connect("/ws", headers=cookie_header(c)) as ws:
+            assert ws.receive_json() == ready_message()  # live call already occupies the device
+            response = c.get("/api/call/press?token=secret-token")
+            assert response.json() == {"ok": True, "reason": "", "action": "triggered"}
+            device.emit_mic(bytes(640))
+            assert ws.receive_bytes() == bytes(640)  # the live call's own device, untouched
