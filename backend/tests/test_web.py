@@ -241,3 +241,43 @@ def test_telegram_test_failure(client, tmp_path, monkeypatch):
     monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (False, "chat not found"))
     response = client.post("/api/admin/telegram/test")
     assert response.json() == {"ok": False, "reason": "chat not found"}
+
+
+def test_admin_settings_get_returns_503_when_settings_file_corrupted(client, tmp_path):
+    login(client)
+    (tmp_path / "settings.toml").write_text("not valid toml [[[")
+    response = client.get("/api/admin/settings")
+    assert response.status_code == 503
+    assert response.json() == {"error": "settings_unavailable"}
+
+
+def test_admin_settings_save_returns_503_when_load_fails(client, monkeypatch):
+    login(client)
+
+    def boom(path):
+        raise OSError("denied")
+
+    monkeypatch.setattr("live_intercom.web.load_settings", boom)
+    response = client.post("/api/admin/settings", json={"chat_id": "-1", "token": "123456:ABCDEFGH"})
+    assert response.status_code == 503
+    assert response.json() == {"error": "settings_unavailable"}
+
+
+def test_admin_settings_save_returns_503_when_write_fails(client, monkeypatch):
+    login(client)
+
+    def boom(path, settings):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("live_intercom.web.save_settings", boom)
+    response = client.post("/api/admin/settings", json={"chat_id": "-1", "token": "123456:ABCDEFGH"})
+    assert response.status_code == 503
+    assert response.json() == {"error": "settings_unavailable"}
+
+
+def test_telegram_test_returns_503_when_settings_file_corrupted(client, tmp_path):
+    login(client)
+    (tmp_path / "settings.toml").write_text("not valid toml [[[")
+    response = client.post("/api/admin/telegram/test")
+    assert response.status_code == 503
+    assert response.json() == {"error": "settings_unavailable"}

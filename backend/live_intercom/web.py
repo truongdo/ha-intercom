@@ -108,10 +108,21 @@ def create_app(
             {"username": user, "audio_available": available}
         )
 
+    async def load_admin_settings() -> Settings | Response:
+        # tomllib.TOMLDecodeError (a ValueError subclass) on a corrupted settings.toml, or OSError
+        # on an unreadable file, both surface the same way login() handles an unreadable users file.
+        try:
+            return await run_in_threadpool(load_settings, config.settings_file)
+        except (OSError, ValueError):
+            log.exception("cannot read settings file %s", config.settings_file)
+            return JSONResponse({"error": "settings_unavailable"}, status_code=503)
+
     async def get_admin_settings(request: Request) -> Response:
         if current_user(request) is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        settings = await run_in_threadpool(load_settings, config.settings_file)
+        settings = await load_admin_settings()
+        if isinstance(settings, Response):
+            return settings
         return JSONResponse(
             {
                 "chat_id": settings.telegram_chat_id,
@@ -129,7 +140,9 @@ def create_app(
             token = str(body["token"]).strip()
         except (ValueError, KeyError, TypeError):
             return JSONResponse({"error": "bad_request"}, status_code=400)
-        current = await run_in_threadpool(load_settings, config.settings_file)
+        current = await load_admin_settings()
+        if isinstance(current, Response):
+            return current
         if current.telegram_bot_token and token == mask_token(current.telegram_bot_token):
             token = current.telegram_bot_token
         try:
@@ -140,12 +153,17 @@ def create_app(
             )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        except OSError:
+            log.exception("cannot write settings file %s", config.settings_file)
+            return JSONResponse({"error": "settings_unavailable"}, status_code=503)
         return JSONResponse({"ok": True})
 
     async def test_telegram(request: Request) -> Response:
         if current_user(request) is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        settings = await run_in_threadpool(load_settings, config.settings_file)
+        settings = await load_admin_settings()
+        if isinstance(settings, Response):
+            return settings
         if not settings.telegram_bot_token or not settings.telegram_chat_id:
             return JSONResponse({"ok": False, "reason": "not_configured"})
         ok, reason = await asyncio.to_thread(
