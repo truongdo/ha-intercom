@@ -37,6 +37,7 @@ class Config:
     audio: AudioConfig
     auth: AuthConfig
     session: SessionConfig
+    public_url: str = ""
 
 
 def load_config(path: Path) -> Config:
@@ -75,4 +76,5 @@ def load_config(path: Path) -> Config:
             idle_timeout_s=float(session_raw.get("idle_timeout_s", 10.0)),
             ring_timeout_s=float(session_raw.get("ring_timeout_s", 30.0)),
         ),
+        public_url=raw.get("public_url", ""),
     )

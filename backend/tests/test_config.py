@@ -20,6 +20,7 @@ def test_defaults(tmp_path: Path):
     assert cfg.session.ring_timeout_s == 30.0
     assert cfg.auth.users_file == tmp_path / "users.toml"
     assert cfg.settings_file == tmp_path / "settings.toml"
+    assert cfg.public_url == ""
 
 
 def test_overrides_and_relative_paths(tmp_path: Path):
@@ -58,3 +59,10 @@ def test_ring_timeout_override(tmp_path: Path):
     path.write_text("[session]\nring_timeout_s = 45\n")
     cfg = load_config(path)
     assert cfg.session.ring_timeout_s == 45.0
+
+
+def test_public_url_override(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text('public_url = "https://intercom.example.com"\n')
+    cfg = load_config(path)
+    assert cfg.public_url == "https://intercom.example.com"
