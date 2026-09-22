@@ -72,6 +72,10 @@ function showIntercom(username: string, audioAvailable: boolean): void {
   settingsLink.onclick = () => showAdmin(username);
   signOut.onclick = async () => { intercom.stop(); await logout(); showLogin(); };
   app.replaceChildren(el("h1", { textContent: "Live Intercom" }), button, status, settingsLink, signOut);
+
+  if (audioAvailable && new URLSearchParams(location.search).has("go")) {
+    void intercom.start();
+  }
 }
 
 function showAdmin(username: string): void {

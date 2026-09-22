@@ -265,7 +265,7 @@ def create_app(
         if not settings.telegram_bot_token or not settings.telegram_chat_id:
             return JSONResponse({"ok": False, "reason": "not_configured"})
         text = (
-            f"📞 Someone wants to talk — open the intercom to answer: {config.public_url}"
+            f"📞 Someone wants to talk — open the intercom to answer: {config.public_url}?go=1"
             if config.public_url
             else "📞 Someone wants to talk — open the intercom to answer."
         )

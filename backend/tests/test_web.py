@@ -475,7 +475,7 @@ def test_call_trigger_sends_message_with_public_url(tmp_path, monkeypatch):
         response = c.get("/api/call/trigger?token=secret-token")
     assert response.status_code == 200
     assert response.json() == {"ok": True, "reason": ""}
-    assert "https://intercom.example.com" in captured["text"]
+    assert "https://intercom.example.com?go=1" in captured["text"]
 
 
 def test_call_trigger_arms_bypass_even_when_telegram_not_configured(client, tmp_path):
