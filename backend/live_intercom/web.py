@@ -232,7 +232,7 @@ def create_app(
         )
         return JSONResponse({"ok": ok, "reason": reason})
 
-    async def handle_call_decision(request: Request, act: Callable[[], bool]) -> Response:
+    async def check_call_token(request: Request) -> Settings | Response:
         settings = await load_admin_settings()
         if isinstance(settings, Response):
             return settings
@@ -240,6 +240,12 @@ def create_app(
         configured = settings.call_confirm_token.encode()
         if not configured or not hmac.compare_digest(supplied, configured):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return settings
+
+    async def handle_call_decision(request: Request, act: Callable[[], bool]) -> Response:
+        settings = await check_call_token(request)
+        if isinstance(settings, Response):
+            return settings
         if act():
             return JSONResponse({"ok": True})
         return JSONResponse({"ok": False, "reason": "no_pending_call"})
@@ -251,13 +257,9 @@ def create_app(
         return await handle_call_decision(request, manager.reject)
 
     async def call_trigger(request: Request) -> Response:
-        settings = await load_admin_settings()
+        settings = await check_call_token(request)
         if isinstance(settings, Response):
             return settings
-        supplied = request.query_params.get("token", "").encode()
-        configured = settings.call_confirm_token.encode()
-        if not configured or not hmac.compare_digest(supplied, configured):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
         manager.trigger_bypass()
         if not settings.telegram_bot_token or not settings.telegram_chat_id:
             return JSONResponse({"ok": False, "reason": "not_configured"})
