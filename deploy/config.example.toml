@@ -13,7 +13,7 @@ jitter_ms = 60
 [auth]
 users_file = "/var/lib/live-intercom/users.toml"
 secret_file = "/var/lib/live-intercom/secret.key"
-session_hours = 12
+session_hours = 9600  # ~400 days: the practical max a modern browser's cookie Max-Age will honor
 secure_cookie = false  # default false so plain-http SSH-forward testing works; true adds the Secure flag (safer, HTTPS only)
 
 [session]
