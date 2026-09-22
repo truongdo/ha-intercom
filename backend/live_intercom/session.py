@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from typing import Callable
 
 from starlette.websockets import WebSocket
@@ -17,6 +18,7 @@ log = logging.getLogger(__name__)
 
 MIC_QUEUE_FRAMES = 50
 STOP_TIMEOUT_S = 3.0
+BYPASS_WINDOW_S = 300.0  # 5 minutes: how long a host-initiated call trigger stays "armed"
 
 
 class SessionManager:
@@ -27,12 +29,15 @@ class SessionManager:
         idle_timeout_s: float,
         pickup_mode_provider: Callable[[], str],
         ring_timeout_s: float,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self._device_factory = device_factory
         self._max_frames = max(1, jitter_ms // FRAME_MS)
         self._idle = idle_timeout_s
         self._pickup_mode_provider = pickup_mode_provider
         self._ring_timeout = ring_timeout_s
+        self._clock = clock
+        self._bypass_until: float | None = None
         self._active = False
         # Serialises device opening with the /api/me PortAudio refresh (see web.py).
         self.device_lock = asyncio.Lock()
@@ -69,6 +74,14 @@ class SessionManager:
             loop, event = self._loop, self._pending_event
         loop.call_soon_threadsafe(event.set)
         return True
+
+    def trigger_bypass(self) -> None:
+        self._bypass_until = self._clock() + BYPASS_WINDOW_S
+
+    def _consume_bypass(self) -> bool:
+        armed = self._bypass_until is not None and self._clock() < self._bypass_until
+        self._bypass_until = None
+        return armed
 
     async def handle(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -162,6 +175,8 @@ class SessionManager:
             receive_task = asyncio.create_task(receive())
 
             pickup_mode = await asyncio.to_thread(self._pickup_mode_provider)
+            if self._consume_bypass():
+                pickup_mode = "auto"
             if pickup_mode == "confirm":
                 await _send_json(ws, ringing_message())
                 confirm_event = asyncio.Event()

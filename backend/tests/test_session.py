@@ -14,20 +14,21 @@ from tests.fakes import FakeDevice, wait_for
 FRAME = bytes(range(256)) * 2 + bytes(128)  # 640 bytes
 
 
-def make_client(factory, idle=5.0, pickup_mode="auto", ring_timeout=5.0):
+def make_client(factory, idle=5.0, pickup_mode="auto", ring_timeout=5.0, clock=time.monotonic):
     manager = SessionManager(
         factory,
         jitter_ms=60,
         idle_timeout_s=idle,
         pickup_mode_provider=lambda: pickup_mode,
         ring_timeout_s=ring_timeout,
+        clock=clock,
     )
 
     async def endpoint(ws):
         await manager.handle(ws)
 
     client = TestClient(Starlette(routes=[WebSocketRoute("/ws", endpoint)]))
-    client.manager = manager  # exposed so tests can call confirm()/reject() directly
+    client.manager = manager  # exposed so tests can call confirm()/reject()/trigger_bypass() directly
     return client
 
 
@@ -266,3 +267,49 @@ def test_idle_timeout_not_triggered_by_long_ring():
             time.sleep(0.15)
             device.emit_mic(FRAME)
             assert ws.receive_bytes() == FRAME
+
+
+def test_trigger_bypass_forces_auto_even_in_confirm_mode():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm") as client:
+        client.manager.trigger_bypass()
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == ready_message()  # skipped ringing entirely
+            device.emit_mic(FRAME)
+            assert ws.receive_bytes() == FRAME
+
+
+def test_trigger_bypass_is_one_shot():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm") as client:
+        client.manager.trigger_bypass()
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == ready_message()  # bypass consumed here
+            ws.send_json({"type": "stop"})
+        assert wait_for(lambda: device.stopped)
+        for _ in range(50):
+            with client.websocket_connect("/ws") as ws:
+                msg = ws.receive_json()
+                if msg["type"] == "ringing":
+                    return
+                assert msg["type"] != "ready"  # must not bypass a second time
+            time.sleep(0.05)
+        raise AssertionError("second call never started ringing")
+
+
+def test_trigger_bypass_expires_after_window():
+    now = [1000.0]
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm", clock=lambda: now[0]) as client:
+        client.manager.trigger_bypass()
+        now[0] += 301.0  # past the 300s (5 min) window
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == {"type": "ringing"}  # bypass expired, rings normally
+
+
+def test_trigger_bypass_with_auto_mode_is_a_no_op():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="auto") as client:
+        client.manager.trigger_bypass()
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == ready_message()  # already auto; bypass irrelevant
