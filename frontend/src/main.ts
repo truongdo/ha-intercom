@@ -1,5 +1,5 @@
 import "./style.css";
-import { getMe, login, logout } from "./api";
+import { getMe, login, logout, getAdminSettings, saveAdminSettings, sendTelegramTest } from "./api";
 import { Intercom, type IntercomState } from "./intercom";
 
 const app = document.getElementById("app")!;
@@ -42,6 +42,7 @@ const LABELS: Record<IntercomState, string> = {
 function showIntercom(username: string, audioAvailable: boolean): void {
   const button = el("button", { className: "mic", textContent: LABELS.idle });
   const status = el("p", { className: "status", textContent: audioAvailable ? "" : "Audio device unavailable." });
+  const settingsLink = el("button", { className: "link", textContent: "Settings" });
   const signOut = el("button", { className: "link", textContent: `Sign out ${username}` });
   button.disabled = !audioAvailable;
 
@@ -57,8 +58,52 @@ function showIntercom(username: string, audioAvailable: boolean): void {
     if (running) intercom.stop();
     else void intercom.start();
   };
+  settingsLink.onclick = () => showAdmin(username);
   signOut.onclick = async () => { intercom.stop(); await logout(); showLogin(); };
-  app.replaceChildren(el("h1", { textContent: "Live Intercom" }), button, status, signOut);
+  app.replaceChildren(el("h1", { textContent: "Live Intercom" }), button, status, settingsLink, signOut);
+}
+
+function showAdmin(username: string): void {
+  const chatId = el("input", { type: "text", placeholder: "Chat ID (e.g. -1001234567890)" });
+  const token = el("input", { type: "text", placeholder: "Bot token" });
+  const status = el("p", { className: "status" });
+  const testButton = el("button", { type: "button", textContent: "Send test message" });
+  const back = el("button", { className: "link", textContent: "Back" });
+  const form = el(
+    "form",
+    {},
+    el("h1", { textContent: "Settings" }),
+    chatId,
+    token,
+    el("button", { textContent: "Save" }),
+    testButton,
+    status,
+    back,
+  );
+
+  void getAdminSettings().then((settings) => {
+    chatId.value = settings.chat_id;
+    token.value = settings.token_set ? settings.token_masked : "";
+  });
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    status.textContent = "Saving…";
+    const result = await saveAdminSettings(chatId.value, token.value).catch(() => "error" as const);
+    status.textContent =
+      result === "ok" ? "Saved." :
+      result === "invalid_chat_id" ? "Chat ID looks wrong." :
+      result === "invalid_token" ? "Bot token looks wrong." :
+      "Could not save settings.";
+  };
+  testButton.onclick = async () => {
+    status.textContent = "Sending…";
+    const result = await sendTelegramTest().catch(() => ({ ok: false, reason: "error" }) as const);
+    status.textContent = result.ok ? "Sent." : `Failed: ${result.reason ?? "error"}`;
+  };
+  back.onclick = () => void start();
+
+  app.replaceChildren(form);
 }
 
 async function start(): Promise<void> {
