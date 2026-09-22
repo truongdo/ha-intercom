@@ -5,7 +5,7 @@ from starlette.websockets import WebSocketDisconnect
 from live_intercom.auth import hash_password, save_user
 from live_intercom.config import AudioConfig, AuthConfig, Config, SessionConfig
 from live_intercom.protocol import ready_message
-from live_intercom.settings import Settings, save_settings
+from live_intercom.settings import save_telegram_settings
 from live_intercom.web import COOKIE, create_app
 from tests.fakes import FakeDevice
 
@@ -229,7 +229,7 @@ def test_telegram_test_not_configured(client):
 
 def test_telegram_test_success(client, tmp_path, monkeypatch):
     login(client)
-    save_settings(tmp_path / "settings.toml", Settings(telegram_bot_token="123456:abc", telegram_chat_id="-1"))
+    save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
     monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (True, ""))
     response = client.post("/api/admin/telegram/test")
     assert response.json() == {"ok": True, "reason": ""}
@@ -237,7 +237,7 @@ def test_telegram_test_success(client, tmp_path, monkeypatch):
 
 def test_telegram_test_failure(client, tmp_path, monkeypatch):
     login(client)
-    save_settings(tmp_path / "settings.toml", Settings(telegram_bot_token="123456:abc", telegram_chat_id="-1"))
+    save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
     monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (False, "chat not found"))
     response = client.post("/api/admin/telegram/test")
     assert response.json() == {"ok": False, "reason": "chat not found"}
@@ -266,10 +266,10 @@ def test_admin_settings_save_returns_503_when_load_fails(client, monkeypatch):
 def test_admin_settings_save_returns_503_when_write_fails(client, monkeypatch):
     login(client)
 
-    def boom(path, settings):
+    def boom(path, token, chat_id):
         raise OSError("disk full")
 
-    monkeypatch.setattr("live_intercom.web.save_settings", boom)
+    monkeypatch.setattr("live_intercom.web.save_telegram_settings", boom)
     response = client.post("/api/admin/settings", json={"chat_id": "-1", "token": "123456:ABCDEFGH"})
     assert response.status_code == 503
     assert response.json() == {"error": "settings_unavailable"}

@@ -23,7 +23,7 @@ from .auth import (
 )
 from .config import Config
 from .session import SessionManager
-from .settings import Settings, load_settings, mask_token, save_settings
+from .settings import load_settings, mask_token, save_telegram_settings
 from .telegram import send_message
 
 log = logging.getLogger(__name__)
@@ -146,11 +146,7 @@ def create_app(
         if current.telegram_bot_token and token == mask_token(current.telegram_bot_token):
             token = current.telegram_bot_token
         try:
-            await run_in_threadpool(
-                save_settings,
-                config.settings_file,
-                Settings(telegram_bot_token=token, telegram_chat_id=chat_id),
-            )
+            await run_in_threadpool(save_telegram_settings, config.settings_file, token, chat_id)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except OSError:
