@@ -251,20 +251,18 @@ def create_app(
             return JSONResponse({"ok": True})
         return JSONResponse({"ok": False, "reason": "no_pending_call"})
 
-    async def call_confirm(request: Request) -> Response:
-        return await handle_call_decision(request, manager.confirm)
-
     async def call_reject(request: Request) -> Response:
         return await handle_call_decision(request, manager.reject)
 
-    async def call_trigger(request: Request) -> Response:
+    async def call_press(request: Request) -> Response:
         settings = await check_call_token(request)
         if isinstance(settings, Response):
             return settings
-        manager.trigger_bypass()
-        log.info("call trigger armed a confirmation bypass")
+        if manager.answer_or_trigger() == "confirmed":
+            return JSONResponse({"ok": True, "action": "confirmed"})
+        log.info("call press armed a confirmation bypass")
         if not settings.telegram_bot_token or not settings.telegram_chat_id:
-            return JSONResponse({"ok": False, "reason": "not_configured"})
+            return JSONResponse({"ok": False, "reason": "not_configured", "action": "triggered"})
         text = (
             f"📞 Someone wants to talk — open the intercom to answer: {config.public_url}?go=1"
             if config.public_url
@@ -273,7 +271,7 @@ def create_app(
         ok, reason = await asyncio.to_thread(
             send_message, settings.telegram_bot_token, settings.telegram_chat_id, text
         )
-        return JSONResponse({"ok": ok, "reason": reason})
+        return JSONResponse({"ok": ok, "reason": reason, "action": "triggered"})
 
     async def ws_endpoint(ws: WebSocket) -> None:
         if not origin_allowed(ws) or current_user(ws) is None:
@@ -290,9 +288,8 @@ def create_app(
         Route("/api/admin/telegram/test", test_telegram, methods=["POST"]),
         Route("/api/admin/call-settings", save_call_settings_route, methods=["POST"]),
         Route("/api/admin/call-token/regenerate", regenerate_call_token, methods=["POST"]),
-        Route("/api/call/confirm", call_confirm, methods=["GET"]),
         Route("/api/call/reject", call_reject, methods=["GET"]),
-        Route("/api/call/trigger", call_trigger, methods=["GET"]),
+        Route("/api/call/press", call_press, methods=["GET"]),
         WebSocketRoute("/ws", ws_endpoint),
     ]
     if config.static_dir.is_dir():

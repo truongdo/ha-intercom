@@ -81,6 +81,18 @@ class SessionManager:
     def trigger_bypass(self) -> None:
         self._bypass_until = self._clock() + BYPASS_WINDOW_S
 
+    def answer_or_trigger(self) -> str:
+        """Confirm a call that's currently ringing, or arm a bypass for the next one.
+
+        `confirm()` already atomically checks whether a call is pending and claims it
+        under `_resolve_lock` — reused here as the single source of truth for "is
+        anything currently ringing", so this can't race a concurrent confirm()/reject().
+        """
+        if self.confirm():
+            return "confirmed"
+        self.trigger_bypass()
+        return "triggered"
+
     def _consume_bypass(self) -> bool:
         armed = self._bypass_until is not None and self._clock() < self._bypass_until
         self._bypass_until = None

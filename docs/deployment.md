@@ -132,36 +132,35 @@ ring_timeout_s = 30      # how long a "wait for confirmation" ring waits before 
 
 ### Home Assistant integration
 
-Three endpoints are meant to be called by Home Assistant, not a browser — each takes the
+Two endpoints are meant to be called by Home Assistant, not a browser — each takes the
 `call_confirm_token` shown on the admin page's "Phone-like calls" section (also shown there
-as three ready-to-paste URLs: `Confirm:`, `Reject:`, `Trigger:`).
+as two ready-to-paste URLs: `Press:`, `Reject:`).
 
 Example `rest_command:` entries for `configuration.yaml`:
 
 ```yaml
 rest_command:
-  intercom_confirm:
-    url: "https://your-tunnel-hostname/api/call/confirm?token=YOUR_TOKEN"
+  intercom_press:
+    url: "https://your-tunnel-hostname/api/call/press?token=YOUR_TOKEN"
     method: GET
   intercom_reject:
     url: "https://your-tunnel-hostname/api/call/reject?token=YOUR_TOKEN"
     method: GET
-  intercom_trigger:
-    url: "https://your-tunnel-hostname/api/call/trigger?token=YOUR_TOKEN"
-    method: GET
 ```
 
-- `intercom_confirm` / `intercom_reject` — call one of these from an automation while a call
-  is ringing (`pickup_mode = "confirm"`) to answer or decline it. A stale or duplicate call
-  (nothing currently ringing) returns `{"ok": false, "reason": "no_pending_call"}`, not an
-  error — safe to call more than once.
-- `intercom_trigger` — call this to have the host notify the configured Telegram group
-  ("someone wants to talk") and let the next person who opens the app connect immediately,
-  skipping ring/confirm even if `pickup_mode` is `"confirm"`. The bypass stays armed for 5
+- `intercom_press` — one button that does the right thing depending on what's happening: if
+  a call is currently ringing (`pickup_mode = "confirm"`), it answers it, same as the old
+  `confirm` endpoint (`{"ok": true, "action": "confirmed"}`). If nothing is ringing, it
+  instead notifies the configured Telegram group ("someone wants to talk") and lets the next
+  person who opens the app connect immediately, skipping ring/confirm even if `pickup_mode`
+  is `"confirm"` (`{"ok": ..., "action": "triggered"}`). The bypass stays armed for 5
   minutes; if nobody connects in that window, it simply expires and the next call rings
   normally again.
-- The token is a shared secret across all three routes — rotate it from the admin page's
-  "Regenerate" button if it's ever exposed, and update all three `rest_command:` entries.
+- `intercom_reject` — call this from an automation while a call is ringing to decline it. A
+  stale or duplicate call (nothing currently ringing) returns
+  `{"ok": false, "reason": "no_pending_call"}`, not an error — safe to call more than once.
+- The token is a shared secret across both routes — rotate it from the admin page's
+  "Regenerate" button if it's ever exposed, and update both `rest_command:` entries.
 
 ### Changing the USB audio device
 
@@ -229,8 +228,8 @@ Speaker and mic levels are not controlled by the app; use `alsamixer -c 2`.
 | Choppy audio over the tunnel | Raise `jitter_ms` (80-100) and restart |
 | Echo or howl | The Jabra's hardware cancellation is normally enough. Otherwise set `echo_cancel = "speex"` (needs the optional package) |
 | Browser asks for the mic and nothing happens | Non-HTTPS, non-localhost origin. Use the tunnel URL or the SSH forward |
-| Ringing… and nothing happens | `pickup_mode` is `"confirm"` but nothing is calling the `intercom_confirm`/`intercom_reject` Home Assistant automation. The ring times out after `ring_timeout_s` (default 30s) and the caller can retry |
-| Host-initiated call notification never arrives | Telegram isn't configured on the admin page (`chat_id`/bot token), or `intercom_trigger`'s token doesn't match the current `call_confirm_token` — the admin page's `Trigger:` URL always shows the current one |
+| Ringing… and nothing happens | `pickup_mode` is `"confirm"` but nothing is calling the `intercom_press`/`intercom_reject` Home Assistant automation. The ring times out after `ring_timeout_s` (default 30s) and the caller can retry |
+| Host-initiated call notification never arrives | Telegram isn't configured on the admin page (`chat_id`/bot token), or `intercom_press`'s token doesn't match the current `call_confirm_token` — the admin page's `Press:` URL always shows the current one |
 
 ## Problems hit during the first deployment (and their fixes)
 

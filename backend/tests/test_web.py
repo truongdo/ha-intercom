@@ -307,31 +307,24 @@ def test_telegram_test_returns_503_when_settings_file_corrupted(client, tmp_path
     assert response.json() == {"error": "settings_unavailable"}
 
 
-def test_call_confirm_requires_matching_token(client, tmp_path):
+def test_call_press_requires_matching_token(client, tmp_path):
     login(client)
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
-    assert client.get("/api/call/confirm").status_code == 401
-    assert client.get("/api/call/confirm?token=wrong").status_code == 401
-    response = client.get("/api/call/confirm?token=secret-token")
+    assert client.get("/api/call/press").status_code == 401
+    assert client.get("/api/call/press?token=wrong").status_code == 401
+    response = client.get("/api/call/press?token=secret-token")
     assert response.status_code == 200
 
 
-def test_call_confirm_with_no_token_configured_always_401(client):
-    assert client.get("/api/call/confirm?token=").status_code == 401
-    assert client.get("/api/call/confirm?token=anything").status_code == 401
+def test_call_press_with_no_token_configured_always_401(client):
+    assert client.get("/api/call/press?token=").status_code == 401
+    assert client.get("/api/call/press?token=anything").status_code == 401
 
 
-def test_call_confirm_with_nothing_pending(client, tmp_path):
-    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
-    response = client.get("/api/call/confirm?token=secret-token")
-    assert response.status_code == 200
-    assert response.json() == {"ok": False, "reason": "no_pending_call"}
-
-
-def test_call_confirm_rejects_non_ascii_token_without_crashing(client, tmp_path):
+def test_call_press_rejects_non_ascii_token_without_crashing(client, tmp_path):
     login(client)
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
-    response = client.get("/api/call/confirm?token=caf%C3%A9")  # URL-encoded "café"
+    response = client.get("/api/call/press?token=caf%C3%A9")  # URL-encoded "café"
     assert response.status_code == 401
     assert response.json() == {"error": "unauthorized"}
 
@@ -343,15 +336,15 @@ def test_call_reject_requires_matching_token(client, tmp_path):
     assert response.status_code == 200
 
 
-def test_call_confirm_via_http_makes_ringing_session_go_live(client, tmp_path):
+def test_call_press_confirms_a_ringing_call(client, tmp_path):
     save_call_settings(tmp_path / "settings.toml", "confirm")
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
     login(client)
     with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
         assert ws.receive_json() == {"type": "ringing"}
-        response = client.get("/api/call/confirm?token=secret-token")
+        response = client.get("/api/call/press?token=secret-token")
         assert response.status_code == 200
-        assert response.json() == {"ok": True}
+        assert response.json() == {"ok": True, "action": "confirmed"}
         assert ws.receive_json() == ready_message()
 
 
@@ -410,38 +403,22 @@ def test_admin_settings_get_auto_generates_token_only_once(client):
     assert first == second  # not regenerated on every GET, only when unset
 
 
-def test_call_trigger_requires_matching_token(client, tmp_path):
+def test_call_press_triggers_when_nothing_ringing_and_telegram_unset(client, tmp_path):
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
-    assert client.get("/api/call/trigger").status_code == 401
-    assert client.get("/api/call/trigger?token=wrong").status_code == 401
-
-
-def test_call_trigger_with_no_token_configured_always_401(client):
-    assert client.get("/api/call/trigger?token=anything").status_code == 401
-
-
-def test_call_trigger_rejects_non_ascii_token_without_crashing(client, tmp_path):
-    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
-    response = client.get("/api/call/trigger?token=caf%C3%A9")
-    assert response.status_code == 401
-
-
-def test_call_trigger_not_configured_when_telegram_unset(client, tmp_path):
-    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
-    response = client.get("/api/call/trigger?token=secret-token")
+    response = client.get("/api/call/press?token=secret-token")
     assert response.status_code == 200
-    assert response.json() == {"ok": False, "reason": "not_configured"}
+    assert response.json() == {"ok": False, "reason": "not_configured", "action": "triggered"}
 
 
-def test_call_trigger_surfaces_telegram_failure(client, tmp_path, monkeypatch):
+def test_call_press_triggers_and_surfaces_telegram_failure(client, tmp_path, monkeypatch):
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
     save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
     monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (False, "chat not found"))
-    response = client.get("/api/call/trigger?token=secret-token")
-    assert response.json() == {"ok": False, "reason": "chat not found"}
+    response = client.get("/api/call/press?token=secret-token")
+    assert response.json() == {"ok": False, "reason": "chat not found", "action": "triggered"}
 
 
-def test_call_trigger_sends_message_without_public_url(client, tmp_path, monkeypatch):
+def test_call_press_triggers_and_sends_message_without_public_url(client, tmp_path, monkeypatch):
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
     save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
     captured = {}
@@ -451,14 +428,14 @@ def test_call_trigger_sends_message_without_public_url(client, tmp_path, monkeyp
         return True, ""
 
     monkeypatch.setattr("live_intercom.web.send_message", fake_send)
-    response = client.get("/api/call/trigger?token=secret-token")
+    response = client.get("/api/call/press?token=secret-token")
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "reason": ""}
+    assert response.json() == {"ok": True, "reason": "", "action": "triggered"}
     assert "http" not in captured["text"]
     assert "Someone wants to talk" in captured["text"]
 
 
-def test_call_trigger_sends_message_with_public_url(tmp_path, monkeypatch):
+def test_call_press_triggers_and_sends_message_with_public_url(tmp_path, monkeypatch):
     app = create_app(
         make_config(tmp_path, public_url="https://intercom.example.com"), lambda: FakeDevice(), lambda r: True
     )
@@ -472,17 +449,17 @@ def test_call_trigger_sends_message_with_public_url(tmp_path, monkeypatch):
 
     monkeypatch.setattr("live_intercom.web.send_message", fake_send)
     with TestClient(app) as c:
-        response = c.get("/api/call/trigger?token=secret-token")
+        response = c.get("/api/call/press?token=secret-token")
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "reason": ""}
+    assert response.json() == {"ok": True, "reason": "", "action": "triggered"}
     assert "https://intercom.example.com?go=1" in captured["text"]
 
 
-def test_call_trigger_arms_bypass_even_when_telegram_not_configured(client, tmp_path):
+def test_call_press_arms_bypass_even_when_telegram_not_configured(client, tmp_path):
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
     save_call_settings(tmp_path / "settings.toml", "confirm")
-    response = client.get("/api/call/trigger?token=secret-token")
-    assert response.json() == {"ok": False, "reason": "not_configured"}
+    response = client.get("/api/call/press?token=secret-token")
+    assert response.json() == {"ok": False, "reason": "not_configured", "action": "triggered"}
     login(client)
     with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
         assert ws.receive_json() == ready_message()

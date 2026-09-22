@@ -334,3 +334,20 @@ def test_ringtone_file_config_reaches_the_ringing_speaker(tmp_path):
         with client.websocket_connect("/ws") as ws:
             ws.receive_json()  # ringing
             assert device.pull_speaker() == custom_cycle[:640]
+
+
+def test_answer_or_trigger_confirms_a_ringing_call():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm") as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ringing
+            assert client.manager.answer_or_trigger() == "confirmed"
+            assert ws.receive_json() == ready_message()
+
+
+def test_answer_or_trigger_arms_bypass_when_nothing_is_ringing():
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm") as client:
+        assert client.manager.answer_or_trigger() == "triggered"
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == ready_message()  # bypass armed, skips ringing

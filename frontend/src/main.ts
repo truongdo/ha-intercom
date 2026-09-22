@@ -106,9 +106,8 @@ function showAdmin(username: string): void {
   const callStatus = el("p", { className: "status" });
   const tokenDisplay = el("input", { type: "text", readOnly: true });
   const regenButton = el("button", { type: "button", textContent: "Regenerate" });
-  const confirmUrl = el("p", { className: "status" });
+  const pressUrl = el("p", { className: "status" });
   const rejectUrl = el("p", { className: "status" });
-  const triggerUrl = el("p", { className: "status" });
   const callForm = el(
     "form",
     {},
@@ -117,17 +116,15 @@ function showAdmin(username: string): void {
     el("button", { textContent: "Save" }),
     tokenDisplay,
     regenButton,
-    confirmUrl,
+    pressUrl,
     rejectUrl,
-    triggerUrl,
     callStatus,
   );
 
   const showToken = (callConfirmToken: string): void => {
     tokenDisplay.value = callConfirmToken;
-    confirmUrl.textContent = `Confirm: ${location.origin}/api/call/confirm?token=${callConfirmToken}`;
+    pressUrl.textContent = `Press: ${location.origin}/api/call/press?token=${callConfirmToken}`;
     rejectUrl.textContent = `Reject: ${location.origin}/api/call/reject?token=${callConfirmToken}`;
-    triggerUrl.textContent = `Trigger: ${location.origin}/api/call/trigger?token=${callConfirmToken}`;
   };
 
   void getAdminSettings()
