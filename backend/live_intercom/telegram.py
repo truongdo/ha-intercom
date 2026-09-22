@@ -22,6 +22,8 @@ def send_message(token: str, chat_id: str, text: str) -> tuple[bool, str]:
     except HTTPError as exc:
         try:
             body = json.loads(exc.read())
+            if not isinstance(body, dict):
+                return False, "telegram_error"
             return False, str(body.get("description", "telegram_error"))[:200]
         except (ValueError, UnicodeDecodeError):
             return False, "telegram_error"
@@ -29,6 +31,8 @@ def send_message(token: str, chat_id: str, text: str) -> tuple[bool, str]:
         log.warning("telegram send_message network error", exc_info=True)
         return False, "network_error"
     except ValueError:
+        return False, "telegram_error"
+    if not isinstance(body, dict):
         return False, "telegram_error"
     if not body.get("ok", False):
         return False, str(body.get("description", "telegram_error"))[:200]

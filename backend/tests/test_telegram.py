@@ -69,3 +69,21 @@ def test_send_message_sends_expected_payload(monkeypatch):
     telegram.send_message("123456:abc", "-1001", "hello there")
     assert captured["url"] == "https://api.telegram.org/bot123456:abc/sendMessage"
     assert captured["body"] == {"chat_id": "-1001", "text": "hello there"}
+
+
+def test_send_message_non_dict_response(monkeypatch):
+    # Response is valid JSON but not a dict (e.g., true, 123, or a list)
+    class NonDictResponse:
+        def read(self) -> bytes:
+            return json.dumps(True).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info: object) -> bool:
+            return False
+
+    monkeypatch.setattr(telegram, "urlopen", lambda request, timeout=10: NonDictResponse())
+    ok, reason = telegram.send_message("123456:abc", "-1001", "hi")
+    assert ok is False
+    assert reason == "telegram_error"
