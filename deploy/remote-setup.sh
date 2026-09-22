@@ -14,6 +14,7 @@ install -d -o intercom -g intercom -m 0750 /var/lib/live-intercom
 [ -f /var/lib/live-intercom/users.toml ] || install -o intercom -g intercom -m 0600 /dev/null /var/lib/live-intercom/users.toml
 install -d -m 0755 /etc/live-intercom
 [ -f /etc/live-intercom/config.toml ] || install -m 0644 "$DEST/deploy/config.example.toml" /etc/live-intercom/config.toml
+install -o intercom -g intercom -m 0644 "$DEST/deploy/ringtone.wav" /var/lib/live-intercom/ringtone.wav
 
 # --system-site-packages picks up the apt-provided numpy, cffi and argon2 (no armv7 wheels to build); sounddevice is a pure-Python wheel from PyPI that uses libportaudio2.
 [ -d "$DEST/venv" ] || python3 -m venv --system-site-packages "$DEST/venv"

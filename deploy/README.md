@@ -10,6 +10,7 @@ Run `deploy/install.sh` from the repo root. It builds the frontend, copies the p
 - creates the `intercom` system user (in group `audio`) and `/var/lib/live-intercom`,
 - creates an empty `/var/lib/live-intercom/users.toml` owned by `intercom` (mode 0600),
 - installs `/etc/live-intercom/config.toml` from `config.example.toml` if it is missing,
+- installs `deploy/ringtone.wav` to `/var/lib/live-intercom/ringtone.wav` (overwritten on every deploy),
 - installs the venv and the systemd unit, then restarts the service.
 
 `INSTALL_APT=1` additionally installs the system packages (needs the owner's approval).
@@ -38,6 +39,9 @@ on every login, so no restart is needed.
   before timing out.
 - `public_url` (top-level, not under a section) — optional link included in the
   host-initiated-call Telegram message; unset by default.
+- `ringtone_file` (top-level) — 16 kHz mono 16-bit PCM WAV played while ringing; the example
+  points it at `/var/lib/live-intercom/ringtone.wav`, which `remote-setup.sh` installs from
+  `deploy/ringtone.wav` on every deploy. Falls back to the built-in tone if missing or invalid.
 - `settings_file` (top-level, not under a section) — where the admin Settings page's Telegram
   bot token/chat ID are saved; defaults next to `config.toml` but the example config points it
   at `/var/lib/live-intercom/settings.toml` since `/etc` is read-only to the service.

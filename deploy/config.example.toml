@@ -3,7 +3,7 @@ port = 8000
 static_dir = "/opt/live-com-ha/frontend-dist"
 settings_file = "/var/lib/live-intercom/settings.toml"
 # public_url = "https://intercom.example.com"  # optional: included as a link in the host-initiated-call Telegram message
-# ringtone_file = "/var/lib/live-intercom/ringtone.wav"  # optional: 16 kHz mono 16-bit PCM WAV; falls back to the built-in tone
+ringtone_file = "/var/lib/live-intercom/ringtone.wav"  # installed by remote-setup.sh from deploy/ringtone.wav; falls back to the built-in tone if missing
 
 [audio]
 device_match = "Jabra"
