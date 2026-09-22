@@ -259,3 +259,10 @@ def test_idle_timeout_not_triggered_by_long_ring():
             time.sleep(0.5)
             assert client.manager.confirm() is True
             assert ws.receive_json() == ready_message()  # not an idle_timeout error
+            # Outlast one watch() poll interval (idle/4 == 0.075s here) before touching the
+            # socket again: if last_rx weren't reset at live-start, the watcher's very first
+            # check would already see the ~0.5s-stale last_rx and fire idle_timeout well within
+            # this window, so this proves absence of a timeout, not just that a frame won a race.
+            time.sleep(0.15)
+            device.emit_mic(FRAME)
+            assert ws.receive_bytes() == FRAME
