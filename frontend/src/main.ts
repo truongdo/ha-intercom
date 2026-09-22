@@ -52,26 +52,41 @@ const LABELS: Record<IntercomState, string> = {
 
 function showIntercom(username: string, audioAvailable: boolean): void {
   const button = el("button", { className: "mic", textContent: LABELS.idle });
+  const muteButton = el("button", { className: "link mute", textContent: "Mute" });
   const status = el("p", { className: "status", textContent: audioAvailable ? "" : "Audio device unavailable." });
   const settingsLink = el("button", { className: "link", textContent: "Settings" });
   const signOut = el("button", { className: "link", textContent: `Sign out ${username}` });
   button.disabled = !audioAvailable;
+  muteButton.hidden = true;
 
   let running = false;
+  let muted = false;
   const intercom = new Intercom((state, detail) => {
     running = state === "live" || state === "connecting" || state === "ringing";
     button.textContent = LABELS[state];
     button.dataset.state = state;
     button.disabled = state === "connecting";
     status.textContent = detail ?? (state === "live" ? "You are connected to the room." : "");
+    muteButton.hidden = !running;
+    if (!running) {
+      muted = false;
+      muteButton.textContent = "Mute";
+      muteButton.dataset.muted = "false";
+    }
   });
   button.onclick = () => {
     if (running) intercom.stop();
     else void intercom.start();
   };
+  muteButton.onclick = () => {
+    muted = !muted;
+    intercom.setMuted(muted);
+    muteButton.textContent = muted ? "Unmute" : "Mute";
+    muteButton.dataset.muted = String(muted);
+  };
   settingsLink.onclick = () => showAdmin(username);
   signOut.onclick = async () => { intercom.stop(); await logout(); showLogin(); };
-  app.replaceChildren(el("h1", { textContent: "Live Intercom" }), button, status, settingsLink, signOut);
+  app.replaceChildren(el("h1", { textContent: "Live Intercom" }), button, muteButton, status, settingsLink, signOut);
 
   if (audioAvailable && new URLSearchParams(location.search).has("go")) {
     void intercom.start();

@@ -27,6 +27,10 @@ export class Intercom {
 
   constructor(private readonly onState: OnState) {}
 
+  setMuted(muted: boolean): void {
+    this.stream?.getAudioTracks().forEach((track) => (track.enabled = !muted));
+  }
+
   async start(): Promise<void> {
     this.finished = false;
     this.generation++;
