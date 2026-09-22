@@ -91,6 +91,7 @@ Copy `deploy/config.example.toml`. The main options:
 | `host`, `port` | `127.0.0.1`, `8000` | where the service listens |
 | `settings_file` | next to `config.toml` | admin-editable settings: Telegram bot token/chat ID, pickup mode, call-confirm token — see the deployment guide |
 | `public_url` | (unset) | optional link included in the host-initiated-call Telegram message |
+| `ringtone_file` | (unset, uses built-in tone) | optional 16 kHz mono 16-bit PCM WAV to play while ringing |
 | `[audio] device_match` | `"Jabra"` | substring of the ALSA device name |
 | `[audio] echo_cancel` | `"off"` | `"speex"` enables the server-side canceller |
 | `[audio] jitter_ms` | `60` | playback buffer; raise if audio is choppy |

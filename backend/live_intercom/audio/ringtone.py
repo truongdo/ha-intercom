@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import logging
+import wave
+from pathlib import Path
+
 import numpy as np
 
 from ..protocol import FRAME_BYTES, RATE
+
+log = logging.getLogger(__name__)
 
 TONE_HZ = 440.0
 RING_ON_S = 1.5
@@ -22,19 +28,44 @@ _CYCLE = _generate_cycle()
 CYCLE_BYTES = len(_CYCLE)
 
 
-class RingtoneSource:
-    """Cycles through a precomputed ring cadence, one FRAME_BYTES chunk at a time, looping forever."""
+def _load_wav(path: Path) -> bytes:
+    with wave.open(str(path), "rb") as wav_file:
+        if wav_file.getframerate() != RATE or wav_file.getnchannels() != 1 or wav_file.getsampwidth() != 2:
+            raise ValueError(
+                f"must be {RATE} Hz mono 16-bit PCM, got {wav_file.getframerate()} Hz, "
+                f"{wav_file.getnchannels()} channel(s), {wav_file.getsampwidth() * 8}-bit"
+            )
+        frames = wav_file.readframes(wav_file.getnframes())
+    if not frames:
+        raise ValueError("file is empty")
+    return frames
 
-    def __init__(self) -> None:
+
+class RingtoneSource:
+    """Cycles through a ring cadence, one FRAME_BYTES chunk at a time, looping forever.
+
+    Loads `ringtone_file` (16 kHz mono 16-bit PCM WAV) if given; falls back to the
+    built-in synthesized tone if it's unset, missing, or not in the expected format —
+    a misconfigured ringtone must never break the call itself.
+    """
+
+    def __init__(self, ringtone_file: Path | None = None) -> None:
+        self._cycle = _CYCLE
+        if ringtone_file is not None:
+            try:
+                self._cycle = _load_wav(ringtone_file)
+            except (OSError, wave.Error, ValueError):
+                log.exception("cannot load ringtone_file %s; using the built-in tone", ringtone_file)
         self._pos = 0
 
     def next_frame(self) -> bytes:
+        cycle = self._cycle
         end = self._pos + FRAME_BYTES
-        if end <= CYCLE_BYTES:
-            frame = _CYCLE[self._pos : end]
-            self._pos = end % CYCLE_BYTES
+        if end <= len(cycle):
+            frame = cycle[self._pos : end]
+            self._pos = end % len(cycle)
         else:
-            wrap = end - CYCLE_BYTES
-            frame = _CYCLE[self._pos :] + _CYCLE[:wrap]
+            wrap = end - len(cycle)
+            frame = cycle[self._pos :] + cycle[:wrap]
             self._pos = wrap
         return frame

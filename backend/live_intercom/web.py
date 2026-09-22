@@ -83,6 +83,7 @@ def create_app(
         config.session.idle_timeout_s,
         pickup_mode_provider=get_pickup_mode,
         ring_timeout_s=config.session.ring_timeout_s,
+        ringtone_file=config.ringtone_file,
     )
 
     def current_user(conn: HTTPConnection) -> str | None:

@@ -14,7 +14,7 @@ from tests.fakes import FakeDevice, wait_for
 FRAME = bytes(range(256)) * 2 + bytes(128)  # 640 bytes
 
 
-def make_client(factory, idle=5.0, pickup_mode="auto", ring_timeout=5.0, clock=time.monotonic):
+def make_client(factory, idle=5.0, pickup_mode="auto", ring_timeout=5.0, clock=time.monotonic, ringtone_file=None):
     manager = SessionManager(
         factory,
         jitter_ms=60,
@@ -22,6 +22,7 @@ def make_client(factory, idle=5.0, pickup_mode="auto", ring_timeout=5.0, clock=t
         pickup_mode_provider=lambda: pickup_mode,
         ring_timeout_s=ring_timeout,
         clock=clock,
+        ringtone_file=ringtone_file,
     )
 
     async def endpoint(ws):
@@ -313,3 +314,23 @@ def test_trigger_bypass_with_auto_mode_is_a_no_op():
         client.manager.trigger_bypass()
         with client.websocket_connect("/ws") as ws:
             assert ws.receive_json() == ready_message()  # already auto; bypass irrelevant
+
+
+def test_ringtone_file_config_reaches_the_ringing_speaker(tmp_path):
+    import wave
+
+    from live_intercom.protocol import RATE
+
+    path = tmp_path / "ringtone.wav"
+    custom_cycle = bytes(range(256)) * 20  # non-silent, distinct from the default synth tone
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(RATE)
+        wav.writeframes(custom_cycle)
+
+    device = FakeDevice()
+    with make_client(lambda: device, pickup_mode="confirm", ringtone_file=path) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ringing
+            assert device.pull_speaker() == custom_cycle[:640]

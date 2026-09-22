@@ -38,6 +38,7 @@ class Config:
     auth: AuthConfig
     session: SessionConfig
     public_url: str = ""
+    ringtone_file: Path | None = None
 
 
 def load_config(path: Path) -> Config:
@@ -77,4 +78,5 @@ def load_config(path: Path) -> Config:
             ring_timeout_s=float(session_raw.get("ring_timeout_s", 30.0)),
         ),
         public_url=raw.get("public_url", ""),
+        ringtone_file=resolve(raw["ringtone_file"], "") if raw.get("ringtone_file") else None,
     )

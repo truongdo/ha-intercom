@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 from starlette.websockets import WebSocket
@@ -30,6 +31,7 @@ class SessionManager:
         pickup_mode_provider: Callable[[], str],
         ring_timeout_s: float,
         clock: Callable[[], float] = time.monotonic,
+        ringtone_file: Path | None = None,
     ):
         self._device_factory = device_factory
         self._max_frames = max(1, jitter_ms // FRAME_MS)
@@ -37,6 +39,7 @@ class SessionManager:
         self._pickup_mode_provider = pickup_mode_provider
         self._ring_timeout = ring_timeout_s
         self._clock = clock
+        self._ringtone_file = ringtone_file
         self._bypass_until: float | None = None
         self._active = False
         # Serialises device opening with the /api/me PortAudio refresh (see web.py).
@@ -104,7 +107,7 @@ class SessionManager:
         mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=MIC_QUEUE_FRAMES)
         events: asyncio.Queue[str] = asyncio.Queue()
         last_rx = [loop.time()]
-        ringtone = RingtoneSource()
+        ringtone = RingtoneSource(self._ringtone_file)
 
         def offer(frame: bytes) -> None:
             if mic_queue.full():
