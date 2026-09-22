@@ -250,6 +250,27 @@ def create_app(
     async def call_reject(request: Request) -> Response:
         return await handle_call_decision(request, manager.reject)
 
+    async def call_trigger(request: Request) -> Response:
+        settings = await load_admin_settings()
+        if isinstance(settings, Response):
+            return settings
+        supplied = request.query_params.get("token", "").encode()
+        configured = settings.call_confirm_token.encode()
+        if not configured or not hmac.compare_digest(supplied, configured):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        manager.trigger_bypass()
+        if not settings.telegram_bot_token or not settings.telegram_chat_id:
+            return JSONResponse({"ok": False, "reason": "not_configured"})
+        text = (
+            f"📞 Someone wants to talk — open the intercom to answer: {config.public_url}"
+            if config.public_url
+            else "📞 Someone wants to talk — open the intercom to answer."
+        )
+        ok, reason = await asyncio.to_thread(
+            send_message, settings.telegram_bot_token, settings.telegram_chat_id, text
+        )
+        return JSONResponse({"ok": ok, "reason": reason})
+
     async def ws_endpoint(ws: WebSocket) -> None:
         if not origin_allowed(ws) or current_user(ws) is None:
             await ws.close(code=1008)
@@ -267,6 +288,7 @@ def create_app(
         Route("/api/admin/call-token/regenerate", regenerate_call_token, methods=["POST"]),
         Route("/api/call/confirm", call_confirm, methods=["GET"]),
         Route("/api/call/reject", call_reject, methods=["GET"]),
+        Route("/api/call/trigger", call_trigger, methods=["GET"]),
         WebSocketRoute("/ws", ws_endpoint),
     ]
     if config.static_dir.is_dir():

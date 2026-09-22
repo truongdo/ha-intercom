@@ -10,7 +10,7 @@ from live_intercom.web import COOKIE, create_app
 from tests.fakes import FakeDevice
 
 
-def make_config(tmp_path, secure_cookie=False):
+def make_config(tmp_path, secure_cookie=False, public_url=""):
     users = tmp_path / "users.toml"
     save_user(users, "alice", hash_password("pw"))
     return Config(
@@ -26,6 +26,7 @@ def make_config(tmp_path, secure_cookie=False):
             secure_cookie=secure_cookie,
         ),
         session=SessionConfig(idle_timeout_s=5.0),
+        public_url=public_url,
     )
 
 
@@ -407,3 +408,81 @@ def test_admin_settings_get_auto_generates_token_only_once(client):
     first = client.get("/api/admin/settings").json()["call_confirm_token"]
     second = client.get("/api/admin/settings").json()["call_confirm_token"]
     assert first == second  # not regenerated on every GET, only when unset
+
+
+def test_call_trigger_requires_matching_token(client, tmp_path):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    assert client.get("/api/call/trigger").status_code == 401
+    assert client.get("/api/call/trigger?token=wrong").status_code == 401
+
+
+def test_call_trigger_with_no_token_configured_always_401(client):
+    assert client.get("/api/call/trigger?token=anything").status_code == 401
+
+
+def test_call_trigger_rejects_non_ascii_token_without_crashing(client, tmp_path):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    response = client.get("/api/call/trigger?token=caf%C3%A9")
+    assert response.status_code == 401
+
+
+def test_call_trigger_not_configured_when_telegram_unset(client, tmp_path):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    response = client.get("/api/call/trigger?token=secret-token")
+    assert response.status_code == 200
+    assert response.json() == {"ok": False, "reason": "not_configured"}
+
+
+def test_call_trigger_surfaces_telegram_failure(client, tmp_path, monkeypatch):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
+    monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (False, "chat not found"))
+    response = client.get("/api/call/trigger?token=secret-token")
+    assert response.json() == {"ok": False, "reason": "chat not found"}
+
+
+def test_call_trigger_sends_message_without_public_url(client, tmp_path, monkeypatch):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
+    captured = {}
+
+    def fake_send(token, chat_id, text):
+        captured["text"] = text
+        return True, ""
+
+    monkeypatch.setattr("live_intercom.web.send_message", fake_send)
+    response = client.get("/api/call/trigger?token=secret-token")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "reason": ""}
+    assert "http" not in captured["text"]
+    assert "Someone wants to talk" in captured["text"]
+
+
+def test_call_trigger_sends_message_with_public_url(tmp_path, monkeypatch):
+    app = create_app(
+        make_config(tmp_path, public_url="https://intercom.example.com"), lambda: FakeDevice(), lambda r: True
+    )
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
+    captured = {}
+
+    def fake_send(token, chat_id, text):
+        captured["text"] = text
+        return True, ""
+
+    monkeypatch.setattr("live_intercom.web.send_message", fake_send)
+    with TestClient(app) as c:
+        response = c.get("/api/call/trigger?token=secret-token")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "reason": ""}
+    assert "https://intercom.example.com" in captured["text"]
+
+
+def test_call_trigger_arms_bypass_even_when_telegram_not_configured(client, tmp_path):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    save_call_settings(tmp_path / "settings.toml", "confirm")
+    response = client.get("/api/call/trigger?token=secret-token")
+    assert response.json() == {"ok": False, "reason": "not_configured"}
+    login(client)
+    with client.websocket_connect("/ws", headers=cookie_header(client)) as ws:
+        assert ws.receive_json() == ready_message()
