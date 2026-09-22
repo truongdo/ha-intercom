@@ -100,6 +100,8 @@ function showIntercom(username: string, audioAvailable: boolean): void {
     button.disabled = state === "connecting";
     status.textContent = detail ?? (state === "live" ? "You are connected to the room." : "");
     callActions.replaceChildren(...(running ? [muteButton] : []));
+    settingsButton.disabled = running;
+    signOutButton.disabled = running;
     if (!running) {
       muted = false;
       muteButton.replaceChildren(icon("mic"));
@@ -118,7 +120,7 @@ function showIntercom(username: string, audioAvailable: boolean): void {
     muteButton.title = muteButton.ariaLabel = muted ? "Unmute microphone" : "Mute microphone";
     muteButton.classList.toggle("muted-on", muted);
   };
-  settingsButton.onclick = () => showAdmin(username);
+  settingsButton.onclick = () => { intercom.stop(); showAdmin(username); };
   signOutButton.onclick = async () => { intercom.stop(); await logout(); showLogin(); };
 
   const topbar = el(
