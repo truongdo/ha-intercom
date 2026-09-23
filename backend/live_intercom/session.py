@@ -141,6 +141,23 @@ class SessionManager:
         self._waiting_task = asyncio.create_task(self._run_waiting_call())
         return True
 
+    async def cancel_waiting_call(self) -> bool:
+        """Stop an unanswered waiting tone and disarm its bypass. Returns False if no
+        waiting call is in progress (including one an answering connection already claimed)."""
+        waiting_task = self._waiting_task
+        if waiting_task is None or waiting_task.done():
+            return False
+        # Claim it synchronously, same as handle()'s takeover, so a concurrent answering
+        # connection can't also claim it.
+        self._waiting_task = None
+        self._bypass_until = None
+        waiting_task.cancel()
+        await asyncio.gather(waiting_task, return_exceptions=True)
+        # The task leaves `_active` set on cancellation (for handle()'s takeover), so it's
+        # released here once the device has stopped.
+        self._active = False
+        return True
+
     async def _run_waiting_call(self) -> None:
         # Always the built-in synthesized tone, regardless of `ringtone_file` — a call the
         # host places should sound different from one it's answering.

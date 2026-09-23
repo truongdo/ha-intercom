@@ -549,16 +549,46 @@ def test_call_press_does_not_hang_up_a_call_that_is_only_ringing(client, tmp_pat
         assert ws.receive_json() == ready_message()
 
 
-def test_call_press_does_not_hang_up_an_unanswered_waiting_tone(tmp_path, monkeypatch):
+def test_call_press_again_cancels_an_unanswered_waiting_tone(tmp_path, monkeypatch):
     device = FakeDevice()
     app = create_app(make_config(tmp_path), lambda: device, lambda r: True)
     save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
     save_telegram_settings(tmp_path / "settings.toml", "123456:abc", "-1")
-    monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (True, ""))
+    sent = []
+    monkeypatch.setattr("live_intercom.web.send_message", lambda token, chat_id, text: (sent.append(text), (True, ""))[1])
     with TestClient(app) as c:
         response = c.get("/api/call/press?token=secret-token")
         assert response.json()["action"] == "triggered"
         assert wait_for(lambda: device.started)
         response = c.get("/api/call/press?token=secret-token")
-        assert response.json() == {"ok": True, "reason": "", "action": "triggered"}  # re-notified, not hung up
-        assert not device.stopped
+        assert response.json() == {"ok": True, "action": "cancelled"}
+        assert device.stopped
+        assert len(sent) == 1  # the cancel doesn't send a second notification
+
+
+def test_call_press_cancel_frees_the_device_and_disarms_the_bypass(tmp_path):
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    save_call_settings(tmp_path / "settings.toml", "confirm")
+    app = create_app(make_config(tmp_path), lambda: FakeDevice(), lambda r: True)
+    with TestClient(app) as c:
+        assert c.get("/api/call/press?token=secret-token").json()["action"] == "triggered"
+        assert c.get("/api/call/press?token=secret-token").json()["action"] == "cancelled"
+        login(c)
+        with c.websocket_connect("/ws", headers=cookie_header(c)) as ws:
+            assert ws.receive_json() == {"type": "ringing"}  # not busy, and no longer bypassed
+
+
+def test_call_press_third_press_starts_a_new_call_request(tmp_path):
+    device_count = []
+
+    def factory():
+        device_count.append(FakeDevice())
+        return device_count[-1]
+
+    app = create_app(make_config(tmp_path), factory, lambda r: True)
+    save_call_confirm_token(tmp_path / "settings.toml", "secret-token")
+    with TestClient(app) as c:
+        assert c.get("/api/call/press?token=secret-token").json()["action"] == "triggered"
+        assert c.get("/api/call/press?token=secret-token").json()["action"] == "cancelled"
+        assert c.get("/api/call/press?token=secret-token").json()["action"] == "triggered"
+        assert wait_for(lambda: len(device_count) == 2 and device_count[1].started)

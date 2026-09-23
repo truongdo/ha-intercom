@@ -161,9 +161,12 @@ rest_command:
   `confirm` endpoint (`{"ok": true, "action": "confirmed"}`). If nothing is ringing, it
   instead notifies the configured Telegram group ("someone wants to talk") and lets the next
   person who opens the app connect immediately, skipping ring/confirm even if `pickup_mode`
-  is `"confirm"` (`{"ok": ..., "action": "triggered"}`). The bypass stays armed for 5
-  minutes; if nobody connects in that window, it simply expires and the next call rings
-  normally again.
+  is `"confirm"` (`{"ok": ..., "action": "triggered"}`), while the host plays a waiting
+  tone. Pressing again before anyone connects cancels the request: the tone stops and the
+  bypass is disarmed (`{"ok": true, "action": "cancelled"}`). Otherwise the bypass stays
+  armed for 5 minutes; if nobody connects in that window, it simply expires and the next
+  call rings normally again. During a live call, a press hangs up
+  (`{"ok": true, "action": "hangup"}`).
 - `intercom_reject` — call this from an automation while a call is ringing to decline it. A
   stale or duplicate call (nothing currently ringing) returns
   `{"ok": false, "reason": "no_pending_call"}`, not an error — safe to call more than once.

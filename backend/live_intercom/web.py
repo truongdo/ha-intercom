@@ -262,6 +262,9 @@ def create_app(
             return settings
         if manager.hang_up():
             return JSONResponse({"ok": True, "action": "hangup"})
+        if await manager.cancel_waiting_call():
+            log.info("call press cancelled an unanswered call request")
+            return JSONResponse({"ok": True, "action": "cancelled"})
         if manager.answer_or_trigger() == "confirmed":
             return JSONResponse({"ok": True, "action": "confirmed"})
         log.info("call press armed a confirmation bypass")
