@@ -27,6 +27,7 @@ wrong the first time. Last verified 2026-09-21 on `root@192.168.0.17`.
 | `/var/lib/live-intercom/secret.key` | cookie-signing key, created on first start (mode 0600) |
 | `/var/lib/live-intercom/settings.toml` | admin-editable settings: Telegram bot token/chat ID, pickup mode, call-confirm token; created on first Settings-page save (owner `intercom`, mode 0600) |
 | `/etc/systemd/system/live-intercom.service` | the service, runs as user `intercom` (group `audio`) on `127.0.0.1:8000` |
+| `/etc/systemd/journald.conf.d/live-intercom.conf` | caps the journal at 20 MB (`SystemMaxUse`) so logs can't slowly fill the SD card |
 
 The service binds to loopback only. It is reachable through the Cloudflare tunnel, or from
 your machine through an SSH port forward.
@@ -200,6 +201,7 @@ systemctl status live-intercom
 systemctl restart live-intercom
 journalctl -u live-intercom -f          # live log
 journalctl -u live-intercom -n 100 --no-pager
+journalctl --disk-usage                 # journal size across all services (capped at 20 MB total)
 ```
 
 Diagnostics that do not need the browser:
