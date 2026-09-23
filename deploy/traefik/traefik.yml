@@ -1,0 +1,38 @@
+# Traefik static configuration. Installed to /etc/traefik/traefik.yml by traefik-setup.sh.
+# The Cloudflare token comes from /etc/traefik/cloudflare.env (CF_DNS_API_TOKEN) via the unit.
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+  # The ISP blocks inbound 80 and 443, so the router forwards public 8443 here.
+  websecure-alt:
+    address: ":8443"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "__ACME_EMAIL__"
+      storage: /var/lib/traefik/acme.json
+      keyType: EC256
+      # DNS-01: Let's Encrypt only connects on 80/443 for the other challenges, and the ISP
+      # blocks both inbound.
+      dnsChallenge:
+        provider: cloudflare
+        # The host's own resolver (systemd-resolved) may cache; ask public resolvers instead.
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
+
+log:
+  level: INFO
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false

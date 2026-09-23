@@ -201,6 +201,77 @@ original `Host` through by default, so nothing to configure. Failed-login rate l
 on the client IP that uvicorn takes from `X-Forwarded-For` (trusted only from `127.0.0.1`).
 Expect more audio delay through the tunnel than over the SSH forward.
 
+## Direct HTTPS with Traefik
+
+Besides the tunnel, the app is served directly at `https://intercom.truongdo.com:8443` by
+Traefik (v3, armv7 binary, systemd), with a Let's Encrypt certificate from the DNS-01 challenge
+through Cloudflare. The ISP blocks inbound 80 and 443, which rules out the HTTP-01 and
+TLS-ALPN-01 challenges (Let's Encrypt only connects on those ports; a TLS-ALPN-01 attempt
+failed with `Timeout during connect`), and `truongdo.ruijieddns.com` offers no DNS API. DNS-01
+needs no inbound port for issuance or renewal.
+
+    deploy/install-traefik.sh    # HOST, INTERCOM_HOST, ACME_EMAIL, TRAEFIK_VERSION overridable
+
+It copies `deploy/traefik/` to the host and runs `traefik-setup.sh` there, which downloads
+and checksum-verifies the pinned release to `/usr/local/bin/traefik`, creates the `traefik`
+user, renders `/etc/traefik/traefik.yml` and `dynamic.yml`, and installs `traefik.service`
+(binds 80, 443 and 8443 through `CAP_NET_BIND_SERVICE`). The app is served on `http://` (80)
+and `https://` (443 and 8443), with no redirect and no HSTS. Over plain HTTP the page and login work,
+but browsers only allow the microphone on HTTPS (or `localhost`), so calls need the HTTPS URL.
+
+| Path | Contents |
+|---|---|
+| `/etc/traefik/cloudflare.env` | `CF_DNS_API_TOKEN=...`, root-only (0600), created by hand; a scoped Cloudflare API token (My Profile → API Tokens → Create Token, "Edit zone DNS" template, zone `truongdo.com`). Not the 37-character Global API Key: Cloudflare rejects that with `6111: Invalid format for Authorization header` |
+| `/etc/traefik/traefik.yml` | entry points, ACME resolver `letsencrypt` (overwritten on every run) |
+| `/etc/traefik/dynamic.yml` | routers `Host(intercom.truongdo.com)` on 80, 443 and 8443 → `http://127.0.0.1:8000` (overwritten on every run) |
+| `/var/lib/traefik/acme.json` | account and certificate keys (owner `traefik`, 0600); renewal is automatic |
+
+The service is not started until `cloudflare.env` exists:
+
+    install -m 0600 /dev/null /etc/traefik/cloudflare.env
+    echo 'CF_DNS_API_TOKEN=<token>' > /etc/traefik/cloudflare.env
+    systemctl enable --now traefik
+    journalctl -u traefik -f          # watch for the certificate being obtained
+
+### Network path
+
+```
+browser --https:8443--> intercom.truongdo.com
+          CNAME truongdo.ruijieddns.com (DNS-only, grey cloud)
+          A 14.248.178.168 (kept current by the Ruijie router's DDNS)
+      --> Ruijie router: port forward TCP 8443 -> 192.168.0.17:8443
+      --> Traefik :8443 (TLS, Let's Encrypt cert) --> http://127.0.0.1:8000 (the app)
+```
+
+| Piece | Setting |
+|---|---|
+| Cloudflare DNS | `intercom` → `CNAME truongdo.ruijieddns.com`, **DNS-only**, so browsers connect straight to the home IP and see Traefik's certificate |
+| Router | port forward / virtual server: external TCP **8443** → `192.168.0.17`, internal port **8443** |
+| Public URL | **`https://intercom.truongdo.com:8443`**, the port is required; without it the browser uses 443, which the ISP blocks |
+| LAN | `https://intercom.truongdo.com:8443` works too (through the router's NAT loopback); 443 and plain `http://` on 80 also answer on the LAN |
+
+Traefik connects to the app from `127.0.0.1`, so uvicorn trusts its `X-Forwarded-For` for
+login rate limiting. The original `Host` (with `:8443`) passes through, and it matches the
+browser's `Origin`, so the WebSocket Origin check passes.
+
+### Operations
+
+```bash
+systemctl status traefik
+journalctl -u traefik -f                 # certificate issuance/renewal shows up here
+deploy/install-traefik.sh                # (dev machine) re-render config, upgrade to TRAEFIK_VERSION
+```
+
+- Renewal is automatic, about 30 days before expiry, through the same Cloudflare DNS
+  challenge. It only needs the token in `cloudflare.env` to stay valid.
+- To see the served certificate:
+  `echo | openssl s_client -connect 192.168.0.17:8443 -servername intercom.truongdo.com 2>/dev/null | openssl x509 -noout -issuer -enddate`
+- For more detail, set `log.level: DEBUG` in `/etc/traefik/traefik.yml` and restart; set it back
+  to `INFO` afterwards (the next `install-traefik.sh` run also resets it).
+- **Testing from the LAN is not proof of outside reachability.** Connecting to the public IP
+  from inside goes through the router's NAT loopback, which skips the ISP. Test the public URL
+  from a phone on mobile data.
+
 ## Day-to-day commands (on the host)
 
 ```bash
@@ -238,6 +309,10 @@ Speaker and mic levels are not controlled by the app; use `alsamixer -c 2`.
 | Echo or howl | The Jabra's hardware cancellation is normally enough. Otherwise set `echo_cancel = "speex"` (needs the optional package) |
 | Browser asks for the mic and nothing happens | Non-HTTPS, non-localhost origin. Use the tunnel URL or the SSH forward |
 | Ringing… and nothing happens | `pickup_mode` is `"confirm"` but nothing is calling the `intercom_press`/`intercom_reject` Home Assistant automation. The ring times out after `ring_timeout_s` (default 30s) and the caller can retry |
+| `ERR_CONNECTION_REFUSED` on `https://intercom.truongdo.com:8443` | The router has no port forward for 8443 (the router itself refuses). Add TCP 8443 → `192.168.0.17:8443` |
+| Timeout on `https://intercom.truongdo.com` (no port) | Port 443 is blocked inbound by the ISP. Use `:8443` |
+| Certificate warning, issuer `TRAEFIK DEFAULT CERT` | Traefik has no certificate for the name. Check `journalctl -u traefik` for the ACME error; the router rule must be `Host(intercom.truongdo.com)` and `cloudflare.env` must hold a valid token |
+| ACME error `6111: Invalid format for Authorization header` | `cloudflare.env` holds the Global API Key. Use a scoped "Edit zone DNS" API token |
 | Host-initiated call notification never arrives | Telegram isn't configured on the admin page (`chat_id`/bot token), or `intercom_press`'s token doesn't match the current `call_confirm_token` — the admin page's `Press:` URL always shows the current one |
 
 ## Problems hit during the first deployment (and their fixes)
@@ -258,6 +333,20 @@ Speaker and mic levels are not controlled by the app; use `alsamixer -c 2`.
 5. **`npm` shim.** On the dev machine `npm` was a broken zsh nvm function; `install.sh`
    accepts `NPM=/path/to/npm`.
 
+### Problems hit setting up Traefik (2026-09-23)
+
+1. **Cloudflare Global API Key used as the token.** The DNS challenge failed with `6111:
+   Invalid format for Authorization header`. Fix: a scoped API token ("Edit zone DNS").
+2. **The ISP blocks inbound 80 and 443.** A TLS-ALPN-01 attempt for `truongdo.ruijieddns.com`
+   failed with `Timeout during connect (likely firewall problem)`, and HTTP-01 is impossible
+   for the same reason. The Ruijie DDNS name has no DNS API, so it cannot get a Let's Encrypt
+   certificate at all. Fix: a `truongdo.com` name (DNS-01 through Cloudflare) CNAMEd to the
+   DDNS name, served on 8443.
+3. **A LAN test said 443 was reachable when it was not.** The request to the public IP went
+   through the router's NAT loopback, not the ISP. Test from mobile data.
+4. **`ERR_CONNECTION_REFUSED` on 8443.** The router had no forward for 8443 yet. Fix: the port
+   forward above.
+
 ## Verification status (2026-09-21)
 
 Verified on the host: apt packages and venv installed, systemd service enabled and running,
@@ -269,3 +358,7 @@ Not yet verified (needs a person with a browser): login, the mic button, audio i
 directions, the one-client lock, unplug/replug, echo behaviour, CPU load during a session
 (`top` on the host while live), and the Cloudflare route. The checklist is in the plan,
 `docs/superpowers/plans/2026-09-21-live-intercom.md`, Task 9, steps 4 to 7.
+
+2026-09-23: Traefik (v3.7.13) serves `https://intercom.truongdo.com:8443` with a Let's
+Encrypt certificate (issuer `YE2`, expires 2026-12-22), and the page was reached from outside
+the home network.

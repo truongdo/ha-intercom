@@ -1,0 +1,22 @@
+[Unit]
+Description=Traefik reverse proxy (HTTP/HTTPS for live-intercom)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=traefik
+Group=traefik
+EnvironmentFile=/etc/traefik/cloudflare.env
+ExecStart=/usr/local/bin/traefik --configFile=/etc/traefik/traefik.yml
+Restart=on-failure
+RestartSec=2
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/traefik
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

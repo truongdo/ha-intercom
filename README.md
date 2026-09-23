@@ -6,7 +6,7 @@ out of the host's speaker, while the host's microphone plays in your browser, bo
 same time.
 
 It runs on an Armbian (Debian 13, 32-bit ARM) board with a Jabra Speak 710, behind a
-Cloudflare tunnel or an SSH port forward.
+Cloudflare tunnel, directly over HTTPS on port 8443 through Traefik, or an SSH port forward.
 
 ## Features
 
@@ -88,6 +88,10 @@ systemd service. Create the first user on the host with `add-user`, run as the `
 user. The exact commands, configuration, Cloudflare setup, troubleshooting and the problems
 hit on the first deploy are in [`docs/deployment.md`](docs/deployment.md).
 
+`deploy/install-traefik.sh` sets up Traefik on the host as a direct HTTPS front
+(`https://intercom.truongdo.com:8443`, Let's Encrypt through the Cloudflare DNS-01 challenge);
+see "Direct HTTPS with Traefik" in the deployment guide.
+
 ## Configuration
 
 Copy `deploy/config.example.toml`. The main options:
@@ -111,7 +115,7 @@ Copy `deploy/config.example.toml`. The main options:
 ```
 backend/    Python package, tests, pyproject.toml, config.dev.toml
 frontend/   Vite + TypeScript app and the AudioWorklets
-deploy/     install.sh, remote-setup.sh, systemd unit, example config
+deploy/     install.sh, remote-setup.sh, systemd unit, example config; install-traefik.sh and traefik/
 docs/       deployment guide, design spec, implementation plan
 ```
 

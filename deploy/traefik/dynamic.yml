@@ -1,0 +1,25 @@
+# Traefik dynamic configuration. Installed to /etc/traefik/dynamic.yml by traefik-setup.sh,
+# which replaces __INTERCOM_HOST__. Traefik reloads this file on change.
+# The app is served on plain HTTP (:80) and HTTPS (:443 and :8443); no redirect and no HSTS,
+# since HSTS would make browsers stop using the HTTP URL.
+
+http:
+  routers:
+    intercom-http:
+      rule: "Host(`__INTERCOM_HOST__`)"
+      entryPoints: [web]
+      service: intercom
+    intercom:
+      rule: "Host(`__INTERCOM_HOST__`)"
+      entryPoints: [websecure, websecure-alt]
+      service: intercom
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    intercom:
+      loadBalancer:
+        # The original Host header is passed through (the default), which the app's
+        # WebSocket Origin check needs.
+        servers:
+          - url: "http://127.0.0.1:8000"
