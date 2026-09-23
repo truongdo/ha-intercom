@@ -22,12 +22,19 @@ systemctl restart systemd-journald
 
 # --system-site-packages picks up the apt-provided numpy, cffi and argon2 (no armv7 wheels to build); sounddevice is a pure-Python wheel from PyPI that uses libportaudio2.
 [ -d "$DEST/venv" ] || python3 -m venv --system-site-packages "$DEST/venv"
+# setuptools reuses backend/build/ when its files look newer than the source, so a stale or
+# damaged copy there (e.g. zeroed by a power cut) would be packaged as-is: always build fresh.
+rm -rf "$DEST/backend/build" "$DEST"/backend/*.egg-info
 "$DEST/venv/bin/pip" install --upgrade "$DEST/backend"
 
 install -m 0644 "$DEST/deploy/live-intercom.service" /etc/systemd/system/live-intercom.service
 systemctl daemon-reload
 systemctl enable live-intercom
 systemctl restart live-intercom
+# Armbian mounts / with commit=120 (writeback), so freshly installed files can sit in RAM for up
+# to two minutes; a power cut in that window left every installed .py file empty and the service
+# exiting silently at boot. Flush before reporting the deploy as done.
+sync
 systemctl --no-pager status live-intercom | head -n 12
 
 cat <<MSG
