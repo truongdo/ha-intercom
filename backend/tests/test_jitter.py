@@ -130,4 +130,4 @@ def test_counts_underruns_and_overflow_drops():
     buf.pop()  # still the same underrun, not a second one
     for frame in (A, B, C, D):
         buf.push(frame)
-    assert buf.stats() == {"underruns": 1, "dropped_frames": 2}
+    assert buf.stats() == {"received_frames": 6, "gap_frames": 2, "underruns": 1, "dropped_frames": 2}

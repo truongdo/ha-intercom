@@ -187,6 +187,10 @@ class SessionManager:
         mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=MIC_QUEUE_FRAMES)
         events: asyncio.Queue[str] = asyncio.Queue()
         last_rx = [loop.time()]
+        # Arrival timing of caller audio, for the per-call log line: [live-phase start, last
+        # frame's arrival, longest gap between frames, gaps over 100 ms]. Frames nominally
+        # arrive every FRAME_MS, so long gaps mean the link stalled rather than jittered.
+        arrivals = [0.0, 0.0, 0.0, 0]
         ringtone = RingtoneSource(self._ringtone_file)
 
         def offer(frame: bytes) -> None:
@@ -245,6 +249,12 @@ class SessionManager:
                     if data is not None:
                         if len(data) == FRAME_BYTES:
                             jitter.push(data)
+                            now = loop.time()
+                            if arrivals[1]:
+                                gap = now - arrivals[1]
+                                arrivals[2] = max(arrivals[2], gap)
+                                arrivals[3] += gap > 0.1
+                            arrivals[1] = now
                         continue
                     try:
                         control = json.loads(message.get("text") or "")
@@ -298,6 +308,7 @@ class SessionManager:
             pull_box[0] = jitter.pop
             mic_sink_box[0] = on_mic
             last_rx[0] = loop.time()  # idle-timeout counts from here, not from ring start
+            arrivals[0] = loop.time()
             self._hangup_event = asyncio.Event()
             self._live = True
             await _send_json(ws, ready_message())
@@ -330,7 +341,14 @@ class SessionManager:
             if self._live:
                 # Per-call network health: frequent underruns/drops mean jitter_ms is too
                 # shallow for the caller's link (typically cellular rather than Wi-Fi).
-                log.info("call ended: jitter buffer %s", jitter.stats())
+                log.info(
+                    "call ended after %.1fs: jitter buffer %s, longest arrival gap %.0f ms, "
+                    "gaps over 100 ms: %d",
+                    loop.time() - arrivals[0],
+                    jitter.stats(),
+                    arrivals[2] * 1000,
+                    arrivals[3],
+                )
             self._loop = None
             self._live = False
             self._hangup_event = None

@@ -60,10 +60,13 @@ class JitterBuffer:
         self._spliced = False
         self._underruns = 0
         self._dropped = 0
+        self._received = 0
+        self._gap_frames = 0
 
     def push(self, frame: bytes) -> None:
         with self._lock:
             self._frames.append(frame)
+            self._received += 1
             if len(self._frames) > self._max:
                 while len(self._frames) > self._prime:
                     self._frames.popleft()
@@ -79,6 +82,8 @@ class JitterBuffer:
                     if not self._priming:
                         self._underruns += 1
                     self._priming = True  # underrun: rebuild depth before playing again
+                if self._had_real:
+                    self._gap_frames += 1
                 entering_gap = self._had_real and not self._silent
                 frame = _fade_out(self._last_sample) if entering_gap else SILENCE
                 self._silent = True
@@ -96,7 +101,12 @@ class JitterBuffer:
 
     def stats(self) -> dict[str, int]:
         with self._lock:
-            return {"underruns": self._underruns, "dropped_frames": self._dropped}
+            return {
+                "received_frames": self._received,
+                "gap_frames": self._gap_frames,  # silence played mid-call while waiting for audio
+                "underruns": self._underruns,
+                "dropped_frames": self._dropped,
+            }
 
     def __len__(self) -> int:
         with self._lock:
