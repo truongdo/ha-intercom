@@ -327,6 +327,10 @@ class SessionManager:
             elif watcher in done and not watcher.cancelled() and watcher.exception() is None:
                 await _send_json(ws, {"type": "error", "reason": watcher.result()})
         finally:
+            if self._live:
+                # Per-call network health: frequent underruns/drops mean jitter_ms is too
+                # shallow for the caller's link (typically cellular rather than Wi-Fi).
+                log.info("call ended: jitter buffer %s", jitter.stats())
             self._loop = None
             self._live = False
             self._hangup_event = None

@@ -7,22 +7,25 @@ import numpy as np
 
 from ..protocol import FRAME_SAMPLES, SILENCE
 
-# ~4 ms at 16 kHz: long enough that a linear ramp masks the jump between real audio and
-# silence, short enough to stay inaudible as an effect in its own right.
-FADE_SAMPLES = min(64, FRAME_SAMPLES)
+# ~8 ms at 16 kHz: long enough to mask the jump between real audio and silence (or between
+# two unrelated stretches of audio), short enough to stay inaudible as an effect in its own right.
+FADE_SAMPLES = min(128, FRAME_SAMPLES)
+
+# Raised cosine 0 -> 1: unlike a linear ramp, its slope is also zero at both ends, so the ramp
+# has no corners that are themselves audible as a soft click (same curve as playback-worklet.js).
+_RAMP = 0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, FADE_SAMPLES, endpoint=True))
 
 
 def _fade_out(from_sample: int) -> bytes:
     out = np.zeros(FRAME_SAMPLES, dtype=np.int16)
-    ramp = np.linspace(from_sample, 0, FADE_SAMPLES, endpoint=True)
-    out[:FADE_SAMPLES] = np.round(ramp).astype(np.int16)
+    out[:FADE_SAMPLES] = np.round(from_sample * (1.0 - _RAMP)).astype(np.int16)
     return out.tobytes()
 
 
-def _fade_in(frame: bytes) -> bytes:
+def _crossfade(from_sample: int, frame: bytes) -> bytes:
+    """Ramp from ``from_sample`` into ``frame``'s own content (from 0 = a plain fade-in)."""
     samples = np.frombuffer(frame, dtype=np.int16).astype(np.float64).copy()
-    ramp = np.linspace(0.0, 1.0, FADE_SAMPLES, endpoint=True)
-    samples[:FADE_SAMPLES] *= ramp
+    samples[:FADE_SAMPLES] = samples[:FADE_SAMPLES] * _RAMP + from_sample * (1.0 - _RAMP)
     return np.round(samples).astype(np.int16).tobytes()
 
 
@@ -34,6 +37,11 @@ class JitterBuffer:
 
     The first silent frame after real audio, and the first real frame after silence, are
     ramped rather than cut, so an underrun (or the buffer priming) doesn't sound like a click.
+
+    On overflow the oldest frames are dropped back down to the priming depth in one go, and
+    the next frame played crossfades from the last sample actually played. Over a bursty link
+    (TCP on cellular stalls, then delivers everything at once) trimming one frame per push
+    instead would splice on every frame of the burst.
     """
 
     def __init__(self, max_frames: int, prime_frames: int | None = None):
@@ -49,12 +57,18 @@ class JitterBuffer:
         self._had_real = False
         self._silent = True
         self._last_sample = 0
+        self._spliced = False
+        self._underruns = 0
+        self._dropped = 0
 
     def push(self, frame: bytes) -> None:
         with self._lock:
-            if len(self._frames) >= self._max:
-                self._frames.popleft()
             self._frames.append(frame)
+            if len(self._frames) > self._max:
+                while len(self._frames) > self._prime:
+                    self._frames.popleft()
+                    self._dropped += 1
+                self._spliced = True
             if len(self._frames) >= self._prime:
                 self._priming = False
 
@@ -62,6 +76,8 @@ class JitterBuffer:
         with self._lock:
             if self._priming or not self._frames:
                 if not self._frames:
+                    if not self._priming:
+                        self._underruns += 1
                     self._priming = True  # underrun: rebuild depth before playing again
                 entering_gap = self._had_real and not self._silent
                 frame = _fade_out(self._last_sample) if entering_gap else SILENCE
@@ -69,11 +85,18 @@ class JitterBuffer:
                 return frame
             frame = self._frames.popleft()
             if self._had_real and self._silent:
-                frame = _fade_in(frame)
+                frame = _crossfade(0, frame)
+            elif self._had_real and self._spliced:
+                frame = _crossfade(self._last_sample, frame)
+            self._spliced = False
             self._silent = False
             self._had_real = True
             self._last_sample = int(np.frombuffer(frame, dtype=np.int16)[-1])
             return frame
+
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            return {"underruns": self._underruns, "dropped_frames": self._dropped}
 
     def __len__(self) -> int:
         with self._lock:

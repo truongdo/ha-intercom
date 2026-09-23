@@ -1,6 +1,6 @@
 // Plays queued Float32 chunks. Prefills ~150 ms before playing (and again after an underrun);
-// silence while priming, drops the oldest audio when over ~300 ms. That's wider than it looks
-// necessary for on paper: the goal isn't just absorbing jitter, it's giving the buffer enough
+// silence while priming, drops the oldest audio back to ~150 ms when over ~300 ms. That's wider
+// than it looks necessary for on paper: the goal isn't just absorbing jitter, it's giving the buffer enough
 // depth that an underrun/overflow event (see below) is rare, not just quiet when it happens.
 //
 // The first silent sample after real audio, and the first real sample after silence, are
@@ -24,9 +24,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.prefill = Math.round(sampleRate * 0.15);
     this.priming = true;
     this.fadeLen = Math.max(1, Math.round(sampleRate * 0.008));
-    this.hadReal = false; // real audio has played; gates fading so startup silence stays silent
     this.wasSilent = true;
-    this.lastSample = 0;
+    // Last value actually output (after any fade). Every fade starts from here, not from the
+    // last real sample or from 0: a new fade can begin while another is still mid-ramp (e.g.
+    // an underrun's fade-out cut short by a burst arriving), and restarting from anything but
+    // the current output value would itself be a jump.
+    this.lastOut = 0;
     this.fadeFrom = 0;
     this.fadeSpan = 0;
     this.fadeLeft = 0;
@@ -34,11 +37,16 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       this.queue.push(event.data);
       this.buffered += event.data.length;
       if (this.buffered >= this.prefill) this.priming = false;
-      while (this.buffered > this.maxBuffered && this.queue.length > 1) {
-        const dropped = this.queue.shift();
-        this.buffered -= dropped.length - this.offset;
-        this.offset = 0;
-        if (this.hadReal) this._startFade(this.lastSample);
+      if (this.buffered > this.maxBuffered) {
+        // Trim back to the prefill depth in one go (one splice, one crossfade) rather than
+        // just under the cap: a bursty link (TCP on cellular) would otherwise re-overflow and
+        // splice again on nearly every chunk of the burst.
+        while (this.buffered > this.prefill && this.queue.length > 1) {
+          const dropped = this.queue.shift();
+          this.buffered -= dropped.length - this.offset;
+          this.offset = 0;
+        }
+        this._startFade(this.lastOut);
       }
     };
   }
@@ -55,10 +63,10 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       const silentNow = this.priming || this.queue.length === 0;
       if (silentNow) {
         if (this.queue.length === 0) this.priming = true; // underrun: rebuild depth first
-        if (this.hadReal && !this.wasSilent) this._startFade(this.lastSample);
+        if (!this.wasSilent) this._startFade(this.lastOut);
         this.wasSilent = true;
       } else {
-        if (this.hadReal && this.wasSilent) this._startFade(0);
+        if (this.wasSilent) this._startFade(this.lastOut); // incl. the very first audio
         this.wasSilent = false;
       }
 
@@ -73,20 +81,18 @@ class PlaybackProcessor extends AudioWorkletProcessor {
           this.queue.shift();
           this.offset = 0;
         }
-        this.hadReal = true;
-        this.lastSample = sample;
       }
 
       if (this.fadeLeft > 0) {
         const t = 1 - this.fadeLeft / this.fadeSpan;
         const s = 0.5 - 0.5 * Math.cos(t * Math.PI); // raised cosine: 0->1, zero slope at both ends
-        // Entering silence: ramp from fadeFrom down to 0. Otherwise: ramp from fadeFrom (0 when
-        // resuming from real silence, the last played sample when smoothing an overflow drop)
-        // up into the real sample being played.
+        // Entering silence: ramp from fadeFrom (the last output value) down to 0. Otherwise:
+        // ramp from fadeFrom into the real sample being played.
         sample = silentNow ? this.fadeFrom * (1 - s) : sample * s + this.fadeFrom * (1 - s);
         this.fadeLeft--;
       }
       out[i] = sample;
+      this.lastOut = sample;
     }
     return true;
   }
