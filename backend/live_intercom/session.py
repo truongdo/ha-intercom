@@ -12,8 +12,17 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .audio.device import AudioDevice, DeviceFactory, DeviceUnavailable
 from .audio.jitter import JitterBuffer
+from .audio.opus import OpusDecoder, OpusEncoder, OpusError
 from .audio.ringtone import RingtoneSource
-from .protocol import FRAME_BYTES, FRAME_MS, ready_message, rejected_message, ringing_message
+from .protocol import (
+    CODEC_OPUS,
+    CODEC_PCM,
+    FRAME_BYTES,
+    FRAME_MS,
+    ready_message,
+    rejected_message,
+    ringing_message,
+)
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +41,7 @@ class SessionManager:
         ring_timeout_s: float,
         clock: Callable[[], float] = time.monotonic,
         ringtone_file: Path | None = None,
+        opus_available: bool = False,
     ):
         self._device_factory = device_factory
         self._max_frames = max(1, jitter_ms // FRAME_MS)
@@ -40,6 +50,7 @@ class SessionManager:
         self._ring_timeout = ring_timeout_s
         self._clock = clock
         self._ringtone_file = ringtone_file
+        self._opus_available = opus_available
         self._bypass_until: float | None = None
         self._active = False
         # Set while a host-initiated trigger is playing a waiting tone, before anyone has
@@ -183,7 +194,22 @@ class SessionManager:
     async def _run(self, ws: WebSocket) -> None:
         loop = asyncio.get_running_loop()
         self._loop = loop
-        jitter = JitterBuffer(self._max_frames)
+        codec = CODEC_PCM
+        encoder: OpusEncoder | None = None
+        decoder: OpusDecoder | None = None
+        if self._opus_available and ws.query_params.get("codec") == CODEC_OPUS:
+            try:
+                encoder, decoder = OpusEncoder(), OpusDecoder()
+                codec = CODEC_OPUS
+            except OpusError:
+                log.exception("opus setup failed; this call uses pcm")
+                _close_codec(encoder, decoder)
+                encoder = decoder = None
+        # Opus packets are decoded on arrival (see receive()), so the buffer holds PCM either
+        # way; with Opus its underruns are bridged with the decoder's loss concealment.
+        jitter = JitterBuffer(self._max_frames, conceal=decoder.conceal if decoder else None)
+        bad_packets = [0]
+        encode_failed = [False]
         mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=MIC_QUEUE_FRAMES)
         events: asyncio.Queue[str] = asyncio.Queue()
         last_rx = [loop.time()]
@@ -234,6 +260,7 @@ class SessionManager:
         if reason is not None:
             if device is not None:
                 await _stop_device(device)
+            _close_codec(encoder, decoder)
             await _send_json(ws, {"type": "error", "reason": reason})
             self._loop = None
             return
@@ -247,8 +274,16 @@ class SessionManager:
                     last_rx[0] = loop.time()
                     data = message.get("bytes")
                     if data is not None:
-                        if len(data) == FRAME_BYTES:
-                            jitter.push(data)
+                        frame: bytes | None = None
+                        if decoder is not None:
+                            try:
+                                frame = decoder.decode(data)
+                            except OpusError:
+                                bad_packets[0] += 1
+                        elif len(data) == FRAME_BYTES:
+                            frame = data
+                        if frame is not None:
+                            jitter.push(frame)
                             now = loop.time()
                             if arrivals[1]:
                                 gap = now - arrivals[1]
@@ -311,11 +346,20 @@ class SessionManager:
             arrivals[0] = loop.time()
             self._hangup_event = asyncio.Event()
             self._live = True
-            await _send_json(ws, ready_message())
+            await _send_json(ws, ready_message(codec))
 
             async def send_mic() -> None:
                 while True:
-                    await ws.send_bytes(await mic_queue.get())
+                    frame = await mic_queue.get()
+                    if encoder is not None:
+                        try:
+                            frame = encoder.encode(frame)
+                        except OpusError:
+                            if not encode_failed[0]:
+                                log.exception("opus encode failed; skipping frames")
+                                encode_failed[0] = True
+                            continue
+                    await ws.send_bytes(frame)
 
             async def watch() -> str:
                 interval = min(0.5, self._idle / 4)
@@ -342,17 +386,20 @@ class SessionManager:
                 # Per-call network health: frequent underruns/drops mean jitter_ms is too
                 # shallow for the caller's link (typically cellular rather than Wi-Fi).
                 log.info(
-                    "call ended after %.1fs: jitter buffer %s, longest arrival gap %.0f ms, "
-                    "gaps over 100 ms: %d",
+                    "call ended after %.1fs (codec %s): jitter buffer %s, longest arrival gap "
+                    "%.0f ms, gaps over 100 ms: %d, bad packets: %d",
                     loop.time() - arrivals[0],
+                    codec,
                     jitter.stats(),
                     arrivals[2] * 1000,
                     arrivals[3],
+                    bad_packets[0],
                 )
             self._loop = None
             self._live = False
             self._hangup_event = None
             await _stop_device(device)
+            _close_codec(encoder, decoder)
 
 
 async def _stop_device(device: AudioDevice) -> None:
@@ -363,6 +410,12 @@ async def _stop_device(device: AudioDevice) -> None:
         log.error("audio device stop timed out after %.1fs", STOP_TIMEOUT_S)
     except Exception:
         log.exception("audio device stop failed")
+
+
+def _close_codec(*codecs: OpusEncoder | OpusDecoder | None) -> None:
+    for codec in codecs:
+        if codec is not None:
+            codec.close()
 
 
 async def _send_json(ws: WebSocket, payload: dict) -> None:

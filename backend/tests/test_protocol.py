@@ -14,7 +14,9 @@ def test_ready_message():
         "rate": 16000,
         "channels": 1,
         "frame_ms": 20,
+        "codec": "pcm",
     }
+    assert protocol.ready_message(protocol.CODEC_OPUS)["codec"] == "opus"
 
 
 def test_ringing_message():

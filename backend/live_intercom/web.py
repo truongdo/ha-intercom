@@ -15,6 +15,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket
 
+from .audio import opus
 from .audio.device import DeviceFactory
 from .auth import (
     RateLimiter,
@@ -84,6 +85,7 @@ def create_app(
         pickup_mode_provider=get_pickup_mode,
         ring_timeout_s=config.session.ring_timeout_s,
         ringtone_file=config.ringtone_file,
+        opus_available=opus.load(),
     )
 
     def current_user(conn: HTTPConnection) -> str | None:

@@ -1,21 +1,34 @@
 import asyncio
+import logging
+import math
+import struct
 import threading
 import time
 
+import pytest
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from live_intercom.audio import opus
 from live_intercom.audio.device import DeviceUnavailable
-from live_intercom.protocol import ready_message
+from live_intercom.protocol import CODEC_OPUS, CODEC_PCM, FRAME_BYTES, SILENCE, ready_message
 from live_intercom.session import SessionManager, _close, _send_json
 from tests.fakes import FakeDevice, wait_for
 
 FRAME = bytes(range(256)) * 2 + bytes(128)  # 640 bytes
 
 
-def make_client(factory, idle=5.0, pickup_mode="auto", ring_timeout=5.0, clock=time.monotonic, ringtone_file=None):
+def make_client(
+    factory,
+    idle=5.0,
+    pickup_mode="auto",
+    ring_timeout=5.0,
+    clock=time.monotonic,
+    ringtone_file=None,
+    opus_available=False,
+):
     manager = SessionManager(
         factory,
         jitter_ms=60,
@@ -24,6 +37,7 @@ def make_client(factory, idle=5.0, pickup_mode="auto", ring_timeout=5.0, clock=t
         ring_timeout_s=ring_timeout,
         clock=clock,
         ringtone_file=ringtone_file,
+        opus_available=opus_available,
     )
 
     async def endpoint(ws):
@@ -371,3 +385,75 @@ def test_close_swallows_disconnect_from_an_already_gone_client():
 
 def test_send_json_swallows_disconnect_from_an_already_gone_client():
     asyncio.run(_send_json(_AbruptlyGoneWebSocket(), {"type": "error"}))  # must not raise
+
+
+TONE = struct.pack("<320h", *(round(8000 * math.sin(2 * math.pi * 440 * i / 16000)) for i in range(320)))
+needs_opus = pytest.mark.skipif(not opus.load(), reason="libopus not installed (brew install opus)")
+
+
+def test_no_codec_query_gets_pcm():
+    with make_client(lambda: FakeDevice(), opus_available=True) as client:
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json() == ready_message(CODEC_PCM)
+
+
+def test_unknown_codec_gets_pcm():
+    with make_client(lambda: FakeDevice(), opus_available=True) as client:
+        with client.websocket_connect("/ws?codec=flac") as ws:
+            assert ws.receive_json() == ready_message(CODEC_PCM)
+
+
+def test_opus_request_without_libopus_falls_back_to_pcm():
+    device = FakeDevice()
+    with make_client(lambda: device, opus_available=False) as client:
+        with client.websocket_connect("/ws?codec=opus") as ws:
+            assert ws.receive_json() == ready_message(CODEC_PCM)
+            device.emit_mic(FRAME)
+            assert ws.receive_bytes() == FRAME  # raw PCM, untouched
+
+
+@needs_opus
+def test_opus_client_packets_are_decoded_to_the_speaker():
+    device = FakeDevice()
+    enc = opus.OpusEncoder()
+    with make_client(lambda: device, opus_available=True) as client:
+        with client.websocket_connect("/ws?codec=opus") as ws:
+            assert ws.receive_json() == ready_message(CODEC_OPUS)
+            for _ in range(3):
+                ws.send_bytes(enc.encode(TONE))
+
+            def heard_audio() -> bool:
+                frame = device.pull_speaker()
+                assert len(frame) == FRAME_BYTES
+                return frame != SILENCE
+
+            assert wait_for(heard_audio)
+
+
+@needs_opus
+def test_opus_host_mic_is_sent_encoded():
+    device = FakeDevice()
+    dec = opus.OpusDecoder()
+    with make_client(lambda: device, opus_available=True) as client:
+        with client.websocket_connect("/ws?codec=opus") as ws:
+            ws.receive_json()
+            device.emit_mic(TONE)
+            packet = ws.receive_bytes()
+            assert 0 < len(packet) < 200  # an Opus packet, not a 640-byte PCM frame
+            assert len(dec.decode(packet)) == FRAME_BYTES
+
+
+@needs_opus
+def test_bad_opus_packet_is_counted_and_the_call_continues(caplog):
+    caplog.set_level(logging.INFO, logger="live_intercom.session")
+    device = FakeDevice()
+    enc = opus.OpusEncoder()
+    with make_client(lambda: device, opus_available=True) as client:
+        with client.websocket_connect("/ws?codec=opus") as ws:
+            ws.receive_json()
+            ws.send_bytes(b"\x03")  # invalid packet
+            ws.send_bytes(FRAME)  # a PCM frame on an Opus call is also invalid
+            for _ in range(3):
+                ws.send_bytes(enc.encode(TONE))
+            assert wait_for(lambda: device.pull_speaker() != SILENCE)
+    assert wait_for(lambda: "codec opus" in caplog.text and "bad packets: 2" in caplog.text)
