@@ -116,7 +116,7 @@ includes `"codec"`.
 - **Receive (Opus):** `decoder.decode(data)` runs, then `jitter.push(pcm)`. Decoding on
   arrival keeps the decoder fed with packets in order, and frames the jitter buffer later
   drops on overflow have already gone through the decoder. The arrival-gap statistics are
-  recorded for every packet that arrives.
+  recorded for every frame accepted into the jitter buffer, the same as for PCM.
 - **Receive (PCM):** unchanged, including the `len(data) == FRAME_BYTES` check.
 - **Send (Opus):** `send_mic` encodes each frame before `ws.send_bytes`.
 - **Jitter buffer:** constructed with `conceal=decoder.conceal` for Opus sessions.
