@@ -1,9 +1,10 @@
 import numpy as np
 
-from live_intercom.audio.jitter import JitterBuffer
+from live_intercom.audio.jitter import MAX_CONCEAL_FRAMES, JitterBuffer
 from live_intercom.protocol import SILENCE
 
 A, B, C, D = (bytes([n]) * 640 for n in (1, 2, 3, 4))
+P = bytes([9]) * 640  # stands in for decoder-concealed audio (int16 value 0x0909)
 
 
 def samples(frame: bytes) -> np.ndarray:
@@ -130,4 +131,70 @@ def test_counts_underruns_and_overflow_drops():
     buf.pop()  # still the same underrun, not a second one
     for frame in (A, B, C, D):
         buf.push(frame)
-    assert buf.stats() == {"received_frames": 6, "gap_frames": 2, "underruns": 1, "dropped_frames": 2}
+    assert buf.stats() == {
+        "received_frames": 6,
+        "gap_frames": 2,
+        "underruns": 1,
+        "dropped_frames": 2,
+        "concealed_frames": 0,
+    }
+
+
+def test_underrun_plays_concealment_then_fades_from_it():
+    buf = JitterBuffer(3, conceal=lambda: P)
+    buf.push(A)
+    buf.push(B)
+    buf.pop()
+    buf.pop()
+    assert [buf.pop() for _ in range(MAX_CONCEAL_FRAMES)] == [P] * MAX_CONCEAL_FRAMES
+    gap = samples(buf.pop())
+    assert gap[0] == samples(P)[-1]  # the fade continues from the concealed audio, no jump
+    assert gap[-1] == 0
+    assert buf.pop() == SILENCE
+    assert buf.stats()["concealed_frames"] == MAX_CONCEAL_FRAMES
+
+
+def test_audio_arriving_mid_concealment_crossfades_from_it():
+    buf = JitterBuffer(3, prime_frames=1, conceal=lambda: P)
+    buf.push(A)
+    buf.pop()
+    assert buf.pop() == P  # underrun: concealment starts
+    buf.push(D)
+    resumed = samples(buf.pop())
+    assert resumed[0] == samples(P)[-1]  # continuous with the concealed frame
+    assert resumed[-1] == samples(D)[-1]  # settles onto the real audio
+    assert np.all(np.diff(resumed.astype(np.int64)) <= 0)  # P > D: smooth monotonic ramp down
+
+
+def test_concealment_run_resets_after_real_audio():
+    buf = JitterBuffer(3, prime_frames=1, conceal=lambda: P)
+    buf.push(A)
+    buf.pop()
+    assert buf.pop() == P
+    buf.push(A)
+    buf.pop()  # real audio again
+    assert [buf.pop() for _ in range(MAX_CONCEAL_FRAMES)] == [P] * MAX_CONCEAL_FRAMES
+
+
+def test_failing_conceal_falls_back_to_fade():
+    def boom() -> bytes:
+        raise RuntimeError("decoder closed")
+
+    buf = JitterBuffer(3, conceal=boom)
+    buf.push(A)
+    buf.push(B)
+    buf.pop()
+    buf.pop()
+    gap = samples(buf.pop())
+    assert gap[0] == samples(B)[-1]
+    assert gap[-1] == 0
+    assert buf.stats()["concealed_frames"] == 0
+
+
+def test_no_concealment_before_any_audio_has_played():
+    calls = []
+    buf = JitterBuffer(3, conceal=lambda: calls.append(1) or P)
+    assert buf.pop() == SILENCE
+    buf.push(A)
+    assert buf.pop() == SILENCE  # still priming at startup: plain silence
+    assert calls == []
