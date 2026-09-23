@@ -5,7 +5,7 @@ DEST=/opt/live-com-ha
 
 if [ "${INSTALL_APT:-0}" = "1" ]; then
   apt-get update
-  apt-get install -y python3-venv python3-numpy python3-cffi python3-argon2 libportaudio2
+  apt-get install -y python3-venv python3-numpy python3-cffi python3-argon2 libportaudio2 libopus0
 fi
 
 id intercom >/dev/null 2>&1 || useradd --system --home /var/lib/live-intercom --shell /usr/sbin/nologin -G audio intercom
