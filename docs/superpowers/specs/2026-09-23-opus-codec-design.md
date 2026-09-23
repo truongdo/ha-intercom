@@ -35,17 +35,23 @@ browser uses WebKit, so native WebCodecs audio can't be relied on.
 | libopus | `libopus0` 1.5.2-2 already installed at `/usr/lib/arm-linux-gnueabihf/libopus.so.0` |
 | Python | 3.13.5 |
 
-libopus has NEON-optimised paths for 32-bit ARM, and 16 kHz mono voice is its lightest mode.
-The CPU cost is expected to be a few percent of one core, but that has **not been measured**.
-The first implementation task is to benchmark on the host (see Testing), and the result sets
-the encoder complexity.
+**CPU, measured on the host (2026-09-23).** 60 s of speech-like audio at 20 kbps, encoded and
+decoded through a ctypes prototype of the wrapper. The figures include the Python loop
+overhead:
+
+| Complexity | CPU per 20 ms frame (encode + decode) | Share of one core | Bitrate |
+|---|---|---|---|
+| 5 | 1.73 ms | 8.6 % | 19.9 kbps |
+| 8 | 2.53 ms | 12.6 % | 19.9 kbps |
+| 10 | 2.52 ms | 12.6 % | 19.9 kbps |
+
+Complexity 5 meets the target of under 10 % of one core, on a 4-core board.
 
 ## Opus settings
 
 - 16 kHz mono (wideband), 20 ms frames (320 samples), matching today's frame timing.
 - Application `OPUS_APPLICATION_VOIP`, 20 kbps VBR.
-- Complexity: 5 by default; raised if the host benchmark shows headroom (target: all Opus
-  work under 10 % of one core).
+- Complexity 5, per the host measurement above.
 - **No DTX.** The server's idle timeout and the jitter buffer both assume a steady 50 frames
   per second, so with DTX a silent caller would look like a dead one.
 - The browser encoder uses the same settings.
@@ -80,11 +86,19 @@ Both directions keep sending 50 messages a second.
 dependency.
 
 - `load() -> bool`: finds and loads the library once. It returns `False` and logs a warning
-  when libopus is missing.
+  when libopus is missing. It tries `ctypes.util.find_library("opus")`, then `libopus.so.0`,
+  then `/opt/homebrew/lib/libopus.0.dylib`, because `find_library` doesn't search Homebrew.
+- `web.py` calls `load()` once when it builds the app and passes the result to
+  `SessionManager(..., opus_available=...)`, which defaults to `False`.
 - `OpusEncoder()`: `encode(pcm: bytes) -> bytes`. Takes exactly `FRAME_BYTES` of input.
 - `OpusDecoder()`: `decode(packet: bytes) -> bytes` returns `FRAME_BYTES` of PCM, and
   `conceal() -> bytes` returns one PLC frame (`opus_decode` with a NULL packet).
-- `OpusError(Exception)` is raised on any negative libopus return code.
+- `OpusError(Exception)` is raised on any negative libopus return code. `decode()` also raises
+  it in two cases where libopus does not:
+  - **an empty packet**, which libopus would silently treat as a lost packet and conceal;
+  - **any packet that decodes to anything other than exactly 320 samples**. libopus is
+    lenient: a 640-byte PCM frame of zeros "decodes" to 160 samples, and arbitrary bytes often
+    decode without error. The sample-count check is the practical validity check.
 - Each object owns its libopus state and frees it in `close()`, with `__del__` as a safety
   net.
 - The decoder has an internal `threading.Lock`, because `decode()` runs on the event loop and
@@ -139,12 +153,22 @@ interface AudioCodec {
 async function createOpusCodec(): Promise<AudioCodec>; // rejects if WASM can't load
 ```
 
-- **Library:** `@evan/opus` (MIT, v1.0.3). It has encoding and decoding with raw packets, a
-  synchronous API and no Ogg container.
-- **Fallback:** `opus-decoder` (MIT, actively maintained, decode-only) plus a separate encoder,
-  used only if `@evan/opus` fails the iPhone Safari check in the first plan task.
-- The WASM is bundled into the frontend build (inlined or as a file next to the page), so no third-party CDN is
-  involved.
+- **Library:** `@evan/wasm` 0.0.95 (MIT), imported as `@evan/wasm/target/opus/deno.js`. Chosen
+  by the owner on 2026-09-23.
+  - It's a self-contained ES module with the libopus WASM inlined, and a synchronous raw-packet
+    API: `new Encoder({channels, sample_rate, application})` with setters `bitrate`,
+    `complexity`, `vbr`, `dtx`; `encode(view) -> Uint8Array`; `new Decoder({channels,
+    sample_rate})`; `decode(view) -> Uint8Array` of int16 LE bytes; `drop()` frees the state.
+  - It has shipped no updates since 2022, has no TypeScript types (the project adds a small
+    `.d.ts`), and compiles its roughly 200 KB WASM synchronously when first imported.
+    `codec.ts` therefore loads it with a dynamic `import()`, so it isn't on the page's critical
+    path and a failure is catchable.
+  - `@evan/opus` was the first candidate but is Node-only: its WASM loader calls
+    `require('fs')`.
+  - Verified in Node 22: at 20 kbps, 16 kHz mono and complexity 5, packets are 39–72 bytes and
+    decode to 640 bytes. Verifying it on iPhone Safari is part of manual acceptance.
+- The WASM is part of the frontend bundle, so no third-party CDN is involved.
+- `decode()` applies the same exactly-320-samples check as the host.
 
 **`src/intercom.ts`.**
 
@@ -180,7 +204,8 @@ async function createOpusCodec(): Promise<AudioCodec>; // rejects if WASM can't 
   - Round trip of a 440 Hz sine: the decoded output correlates with the input (allowing for
     codec delay), and the packet is under 100 bytes.
   - `conceal()` returns `FRAME_BYTES`.
-  - Garbage input raises `OpusError`.
+  - An invalid packet (`b"\x03"`, which libopus rejects), an empty packet and a 640-byte PCM
+    frame each raise `OpusError`.
   - Wrong-sized encoder input raises `ValueError`.
 - `test_jitter.py`:
   - With `conceal`: an underrun yields at most 2 concealed frames, then a fade, then silence.
@@ -198,11 +223,9 @@ async function createOpusCodec(): Promise<AudioCodec>; // rejects if WASM can't 
 **Frontend (vitest).** `codec.test.ts`: WASM round trip in Node, a packet-size range check,
 and `close()` being idempotent.
 
-**On the host (first plan task).**
-- Copy `audio/opus.py` and a benchmark script to the Orange Pi.
-- Encode and decode 60 s of speech-like audio at complexity 5, 8 and 10. Record CPU time per
-  20 ms frame and pick the complexity.
-- Then run one end-to-end call with the echo canceller on and watch `top`.
+**On the host.** The codec benchmark is done (see Target host). After the deploy, run one
+end-to-end call and watch the service's CPU in `top`. The expectation is roughly 10 % of one
+core or less above today's figure.
 
 **Manual acceptance.** Checked against the per-call log for `codec=opus`, `bad_packets=0`, and
 underruns and concealed frames:
