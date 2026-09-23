@@ -444,6 +444,18 @@ def test_opus_host_mic_is_sent_encoded():
 
 
 @needs_opus
+def test_encode_failure_is_skipped_and_the_call_continues():
+    device = FakeDevice()
+    with make_client(lambda: device, opus_available=True) as client:
+        with client.websocket_connect("/ws?codec=opus") as ws:
+            ws.receive_json()
+            device.emit_mic(bytes(100))  # wrong length: OpusEncoder.encode raises ValueError
+            device.emit_mic(TONE)
+            packet = ws.receive_bytes()
+            assert 0 < len(packet) < 200
+
+
+@needs_opus
 def test_bad_opus_packet_is_counted_and_the_call_continues(caplog):
     caplog.set_level(logging.INFO, logger="live_intercom.session")
     device = FakeDevice()

@@ -145,7 +145,8 @@ class JitterBuffer:
         with self._lock:
             return {
                 "received_frames": self._received,
-                "gap_frames": self._gap_frames,  # silence played mid-call while waiting for audio
+                "gap_frames": self._gap_frames,  # every frame played mid-call while waiting for
+                # audio (concealed or silent) — concealed_frames below is the concealed subset
                 "underruns": self._underruns,
                 "dropped_frames": self._dropped,
                 "concealed_frames": self._concealed,

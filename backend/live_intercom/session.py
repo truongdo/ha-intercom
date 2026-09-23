@@ -354,7 +354,7 @@ class SessionManager:
                     if encoder is not None:
                         try:
                             frame = encoder.encode(frame)
-                        except OpusError:
+                        except (OpusError, ValueError):
                             if not encode_failed[0]:
                                 log.exception("opus encode failed; skipping frames")
                                 encode_failed[0] = True

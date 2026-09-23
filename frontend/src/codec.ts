@@ -33,8 +33,13 @@ export async function createOpusCodec(): Promise<AudioCodec> {
   }
   let closed = false;
   return {
-    encode: (pcm) => encoder.encode(pcm),
+    encode(pcm) {
+      // After drop() the WASM state pointer is 0; libopus would scribble near address 0.
+      if (closed) throw new Error("codec closed");
+      return encoder.encode(pcm);
+    },
     decode(packet) {
+      if (closed) throw new Error("codec closed");
       // libopus is lenient: empty input would be concealed, other junk often "decodes".
       if (packet.length === 0) throw new Error("empty opus packet");
       const bytes = decoder.decode(packet);

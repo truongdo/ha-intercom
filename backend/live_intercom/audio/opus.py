@@ -46,9 +46,9 @@ def load() -> bool:
             continue
         try:
             lib = ctypes.CDLL(name)
-        except OSError:
+            _declare(lib)
+        except (OSError, AttributeError):
             continue
-        _declare(lib)
         _lib = lib
         return True
     log.warning("libopus not found; calls will use raw PCM")

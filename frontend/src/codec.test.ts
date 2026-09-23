@@ -43,6 +43,13 @@ describe("createOpusCodec", () => {
     codec.close();
     expect(() => codec.close()).not.toThrow();
   });
+
+  it("throws instead of using the codec after close", async () => {
+    const codec = await createOpusCodec();
+    codec.close();
+    expect(() => codec.encode(new Int16Array(320))).toThrow("codec closed");
+    expect(() => codec.decode(new Uint8Array([0x78, 0]))).toThrow("codec closed");
+  });
 });
 
 describe("resolveWireCodec", () => {
