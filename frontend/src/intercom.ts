@@ -40,11 +40,14 @@ export class Intercom {
   async start(): Promise<void> {
     this.finished = false;
     this.generation++;
+    const generation = this.generation;
+    const stale = () => this.finished || this.generation !== generation;
     this.onState("connecting");
     document.addEventListener("visibilitychange", this.onVisibilityChange);
     void this.requestWakeLock();
+    let stream: MediaStream;
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -56,16 +59,22 @@ export class Intercom {
       this.finish("error", "Microphone permission was denied.");
       return;
     }
+    if (stale()) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.stream = stream;
+    let codec: AudioCodec | null = null;
     try {
-      this.codec = await createOpusCodec();
+      codec = await createOpusCodec();
     } catch (err) {
       console.warn("opus unavailable, using pcm", err);
     }
-    if (this.finished) {
-      this.codec?.close();
-      this.codec = null;
+    if (stale()) {
+      codec?.close();
       return;
     }
+    this.codec = codec;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     const query = this.codec ? "?codec=opus" : "";
     const ws = new WebSocket(`${scheme}://${location.host}/ws${query}`);
