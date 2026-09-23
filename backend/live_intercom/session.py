@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .audio.device import AudioDevice, DeviceFactory, DeviceUnavailable
 from .audio.jitter import JitterBuffer
@@ -346,12 +346,15 @@ async def _stop_device(device: AudioDevice) -> None:
 async def _send_json(ws: WebSocket, payload: dict) -> None:
     try:
         await ws.send_json(payload)
-    except (RuntimeError, OSError):
+    except (RuntimeError, OSError, WebSocketDisconnect):
         pass
 
 
 async def _close(ws: WebSocket) -> None:
     try:
         await ws.close()
-    except (RuntimeError, OSError):
+    except (RuntimeError, OSError, WebSocketDisconnect):
+        # An abrupt client-side disconnect (e.g. the network just dropping, code 1006) makes
+        # close()'s own send raise WebSocketDisconnect instead of returning cleanly — the
+        # session has still ended correctly, there's just no one left to send the close frame to.
         pass

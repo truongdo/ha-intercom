@@ -5,10 +5,11 @@ import time
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from live_intercom.audio.device import DeviceUnavailable
 from live_intercom.protocol import ready_message
-from live_intercom.session import SessionManager
+from live_intercom.session import SessionManager, _close, _send_json
 from tests.fakes import FakeDevice, wait_for
 
 FRAME = bytes(range(256)) * 2 + bytes(128)  # 640 bytes
@@ -351,3 +352,22 @@ def test_answer_or_trigger_arms_bypass_when_nothing_is_ringing():
         assert client.manager.answer_or_trigger() == "triggered"
         with client.websocket_connect("/ws") as ws:
             assert ws.receive_json() == ready_message()  # bypass armed, skips ringing
+
+
+class _AbruptlyGoneWebSocket:
+    """A client that vanished (network dropped) rather than closing cleanly: any attempt to
+    send it something, including the close handshake, raises WebSocketDisconnect(1006)."""
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        raise WebSocketDisconnect(code=1006)
+
+    async def send_json(self, data) -> None:
+        raise WebSocketDisconnect(code=1006)
+
+
+def test_close_swallows_disconnect_from_an_already_gone_client():
+    asyncio.run(_close(_AbruptlyGoneWebSocket()))  # must not raise
+
+
+def test_send_json_swallows_disconnect_from_an_already_gone_client():
+    asyncio.run(_send_json(_AbruptlyGoneWebSocket(), {"type": "error"}))  # must not raise

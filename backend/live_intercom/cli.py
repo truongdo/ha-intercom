@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import logging
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,13 @@ def cmd_serve(cfg: Config) -> int:
 
     from .audio.alsa import open_alsa_device, probe_audio
     from .web import create_app
+
+    # Nothing else in the app ever configures logging, and the root logger has no handler by
+    # default, so every live_intercom log.info/log.debug call (jitter/audio diagnostics, the
+    # ALSA device line, etc.) was silently dropped — only WARNING+ ever reached Python's
+    # last-resort handler. uvicorn's own log_level="info" only configures uvicorn's *own*
+    # loggers, not root, so it never fixed this. This basicConfig call is what actually does.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     app = create_app(
         cfg,
