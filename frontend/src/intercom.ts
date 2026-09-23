@@ -1,3 +1,4 @@
+import { type AudioCodec, type WireCodec, createOpusCodec, resolveWireCodec } from "./codec";
 import { Framer, StreamResampler, floatToInt16, int16ToFloat } from "./framing";
 
 const WIRE_RATE = 16000;
@@ -22,6 +23,10 @@ export class Intercom {
   private playback: AudioWorkletNode | null = null;
   private upsampler: StreamResampler | null = null;
   private wakeLock: WakeLockSentinel | null = null;
+  /** Loaded before connecting; null if the WASM couldn't load (the call then uses PCM). */
+  private codec: AudioCodec | null = null;
+  /** What the server's ready message confirmed; decides how binary frames are coded. */
+  private wireCodec: WireCodec = "pcm";
   private finished = false;
   /** Bumped on every start(); async continuations from an earlier session compare against it. */
   private generation = 0;
@@ -51,15 +56,28 @@ export class Intercom {
       this.finish("error", "Microphone permission was denied.");
       return;
     }
+    try {
+      this.codec = await createOpusCodec();
+    } catch (err) {
+      console.warn("opus unavailable, using pcm", err);
+    }
+    if (this.finished) {
+      this.codec?.close();
+      this.codec = null;
+      return;
+    }
     const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${scheme}://${location.host}/ws`);
+    const query = this.codec ? "?codec=opus" : "";
+    const ws = new WebSocket(`${scheme}://${location.host}/ws${query}`);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
     ws.onmessage = (event) => {
       if (typeof event.data === "string") {
         void this.onControl(JSON.parse(event.data));
       } else if (this.playback && this.upsampler) {
-        const samples = this.upsampler.process(int16ToFloat(new Int16Array(event.data)));
+        const pcm = this.decodeFrame(event.data as ArrayBuffer);
+        if (!pcm) return;
+        const samples = this.upsampler.process(int16ToFloat(pcm));
         this.playback.port.postMessage(samples, [samples.buffer]);
       }
     };
@@ -76,8 +94,27 @@ export class Intercom {
     this.finish("idle");
   }
 
-  private async onControl(message: { type: string; reason?: string }): Promise<void> {
+  private decodeFrame(data: ArrayBuffer): Int16Array | null {
+    if (this.wireCodec !== "opus" || !this.codec) return new Int16Array(data);
+    try {
+      return this.codec.decode(new Uint8Array(data));
+    } catch {
+      return null; // skip it: the playback worklet's underrun crossfade covers the gap
+    }
+  }
+
+  private encodeFrame(frame: Int16Array): Int16Array | Uint8Array | null {
+    if (this.wireCodec !== "opus" || !this.codec) return frame;
+    try {
+      return this.codec.encode(frame);
+    } catch {
+      return null;
+    }
+  }
+
+  private async onControl(message: { type: string; reason?: string; codec?: string }): Promise<void> {
     if (message.type === "ready") {
+      this.wireCodec = resolveWireCodec(this.codec !== null, message.codec);
       await this.startAudio();
     } else if (message.type === "ringing") {
       this.onState("ringing");
@@ -123,7 +160,8 @@ export class Intercom {
       if (stale()) return;
       const pcm = floatToInt16(downsampler.process(event.data as Float32Array));
       for (const frame of framer.push(pcm)) {
-        if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+        const payload = this.encodeFrame(frame);
+        if (payload && ws.readyState === WebSocket.OPEN) ws.send(payload);
       }
     };
 
@@ -169,6 +207,9 @@ export class Intercom {
     ws?.close();
     this.stream?.getTracks().forEach((track) => track.stop());
     void this.ctx?.close().catch(() => {});
+    this.codec?.close();
+    this.codec = null;
+    this.wireCodec = "pcm";
     this.stream = this.ctx = this.playback = this.upsampler = null;
     this.onState(state, detail);
   }

@@ -14,6 +14,13 @@ wrong the first time. Last verified 2026-09-21 on `root@192.168.0.17`.
 | Sound server | none (no PulseAudio/PipeWire); the app uses ALSA directly |
 | Tunnel | `cloudflared` runs as a system service (token file `/etc/cloudflared/token`); its tunnel config is the owner's, not part of this project |
 
+Audio travels as Opus (see `backend/live_intercom/audio/opus.py`), using the system
+`libopus0` (1.5.2 on Debian 13), which `INSTALL_APT=1` installs. On this board, encoding and
+decoding one call costs about 9 % of one core (complexity 5, measured 2026-09-23). If the
+library is missing, the service logs `libopus not found; calls will use raw PCM` at startup
+and keeps working at about 10× the bandwidth. The per-call log line reports the codec
+(`codec opus`), the `bad packets` count and the jitter buffer's `concealed_frames`.
+
 ## What gets installed where
 
 | Path | Contents |

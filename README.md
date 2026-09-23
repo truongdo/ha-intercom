@@ -10,7 +10,10 @@ Cloudflare tunnel or an SSH port forward.
 
 ## Features
 
-- Full-duplex voice over one WebSocket: 16 kHz mono 16-bit PCM in 20 ms frames.
+- Full-duplex voice over one WebSocket in 20 ms frames of 16 kHz mono, coded as Opus at about
+  20 kbps per direction (WASM libopus in the browser, the system libopus on the host). If
+  either side can't load Opus, the call falls back to raw 16-bit PCM (256 kbps), negotiated
+  per call.
 - Username and password login (argon2 hashes, signed `HttpOnly` session cookie, rate-limited).
 - One active client at a time; anyone else sees "In use".
 - Echo control: browser echo cancellation always on; optional server-side canceller
@@ -41,6 +44,9 @@ Browser                                          Host (one Python process, 127.0
 ## Run it locally
 
 Needs Python 3.11 or newer and Node 18 or newer.
+
+For Opus on the backend, install libopus (`brew install opus` on macOS); without it the
+backend runs PCM-only and the Opus tests are skipped.
 
 ```bash
 # backend
