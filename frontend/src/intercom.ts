@@ -21,6 +21,7 @@ export class Intercom {
   private stream: MediaStream | null = null;
   private playback: AudioWorkletNode | null = null;
   private upsampler: StreamResampler | null = null;
+  private wakeLock: WakeLockSentinel | null = null;
   private finished = false;
   /** Bumped on every start(); async continuations from an earlier session compare against it. */
   private generation = 0;
@@ -35,6 +36,8 @@ export class Intercom {
     this.finished = false;
     this.generation++;
     this.onState("connecting");
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
+    void this.requestWakeLock();
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -139,9 +142,28 @@ export class Intercom {
     this.onState("live");
   }
 
+  private onVisibilityChange = (): void => {
+    // Some browsers release the wake lock when the tab is hidden; reacquire it once visible
+    // again so the screen doesn't fall asleep for the rest of the call.
+    if (!this.finished && document.visibilityState === "visible") void this.requestWakeLock();
+  };
+
+  private async requestWakeLock(): Promise<void> {
+    if (!("wakeLock" in navigator)) return;
+    try {
+      this.wakeLock = await navigator.wakeLock.request("screen");
+    } catch {
+      // Unsupported, denied, or the page went hidden before the request resolved; the call
+      // continues without it.
+    }
+  }
+
   private finish(state: IntercomState, detail?: string): void {
     if (this.finished) return;
     this.finished = true;
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    void this.wakeLock?.release().catch(() => {});
+    this.wakeLock = null;
     const ws = this.ws;
     this.ws = null;
     ws?.close();
